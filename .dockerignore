@@ -1,0 +1,12 @@
+node_modules
+dist
+.git
+.gitignore
+*.md
+.vscode
+.idea
+
+# Backend build artifacts
+backend/adpanel
+backend/data/
+backend/servers/

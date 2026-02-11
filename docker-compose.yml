@@ -1,0 +1,46 @@
+services:
+  adpanel:
+    build: .
+    image: minecraft-adpanel:latest
+    container_name: minecraft-adpanel
+    restart: unless-stopped
+
+    # Host networking is recommended for Minecraft server panels:
+    # - The panel web UI is accessible on port 4010
+    # - Minecraft servers bind directly to host ports (25565, etc.)
+    # - No need to manually map each server's port
+    network_mode: host
+
+    volumes:
+      # Server files persist here — your worlds, plugins, configs
+      - /DATA/AppData/minecraft-adpanel/servers:/AdPanel/Servers
+      # Panel configuration (servers.json)
+      - /DATA/AppData/minecraft-adpanel/data:/AdPanel/data
+      # Backups stored centrally
+      - /DATA/AppData/minecraft-adpanel/backups:/AdPanel/Backups
+      # Host timezone — so console timestamps match your local time
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+
+    environment:
+      - ADPANEL_DIR=/AdPanel
+      # Some upstream APIs (e.g., PaperMC) require a non-generic User-Agent with contact info.
+      # Set this to your preferred contact URL or email.
+      # - ADPANEL_USER_AGENT=MinecraftAdminPanel/1.0 (contact: admin@example.com)
+
+    labels:
+      icon: https://i.imgur.com/PPQD6NN.png
+      io.casaos.app.name: Minecraft Admin Panel
+      io.casaos.app.icon: https://i.imgur.com/PPQD6NN.png
+      io.casaos.app.port: "4010"
+      io.casaos.app.scheme: http
+
+    # If you prefer bridge networking instead of host mode,
+    # comment out "network_mode: host" above and uncomment below:
+    #
+    # ports:
+    #   - "4010:4010"       # Web UI
+    #   - "25565:25565"     # Minecraft server 1
+    #   - "25566:25566"     # Minecraft server 2
+    #   - "25567:25567"     # Minecraft server 3
+    #   # Add more ports as needed for additional servers
