@@ -9,7 +9,7 @@ export const SystemSettingsPage = () => {
   const [defaultMinRam, setDefaultMinRam] = useState('0.5');
   const [defaultMaxRam, setDefaultMaxRam] = useState('1');
   const [defaultFlags, setDefaultFlags] = useState('none');
-  const [statusPollInterval, setStatusPollInterval] = useState(3);
+  const [statusPollInterval, setStatusPollInterval] = useState('3');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -25,7 +25,7 @@ export const SystemSettingsPage = () => {
           setDefaultMinRam(data.defaultMinRam || '0.5');
           setDefaultMaxRam(data.defaultMaxRam || '1');
           setDefaultFlags(data.defaultFlags || 'none');
-          setStatusPollInterval(data.statusPollInterval || 3);
+          setStatusPollInterval(String(data.statusPollInterval || 3));
         }
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Failed to load settings');
@@ -38,12 +38,19 @@ export const SystemSettingsPage = () => {
   }, []);
 
   const handleSave = async () => {
+    // Validate Status Polling Interval
+    const pollInterval = parseInt(String(statusPollInterval), 10);
+    if (isNaN(pollInterval) || pollInterval < 1 || pollInterval > 30) {
+      toast.error('Insert a valid value.');
+      return;
+    }
+
     setSaving(true);
     try {
       const res = await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userAgent, defaultMinRam, defaultMaxRam, defaultFlags, statusPollInterval }),
+        body: JSON.stringify({ userAgent, defaultMinRam, defaultMaxRam, defaultFlags, statusPollInterval: pollInterval }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -154,10 +161,11 @@ export const SystemSettingsPage = () => {
             <hr className="border-[#3a3a3a] my-6" />
             <label className="block text-sm text-gray-400 mb-2">Status Polling Interval (seconds)</label>
             <input
-              type="number"
+              type="text"
+              inputMode="numeric"
               value={statusPollInterval}
-              onChange={(e) => setStatusPollInterval(Math.max(1, Math.min(30, parseInt(e.target.value) || 3)))}
-              min={1} max={30}
+              onChange={(e) => setStatusPollInterval(e.target.value)}
+              pattern="\d*"
               className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B] max-w-[200px]"
               disabled={saving}
             />

@@ -100,9 +100,21 @@ const LiveLogs = () => {
             else if (raw === 'SEVERE' || raw === 'FATAL') logType = 'ERROR';
             else logType = raw;
           }
+
+          // Convert server timestamp (UTC) to local time
+          let displayTime: string;
+          if (match) {
+            const [hh, mm, ss] = match[1].split(':').map(Number);
+            const now = new Date();
+            const utcDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hh, mm, ss));
+            displayTime = utcDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+          } else {
+            displayTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+          }
+
           const parsed: ParsedLog = {
             id: logIdRef.current++,
-            time: match ? match[1] : new Date().toLocaleTimeString(),
+            time: displayTime,
             type: logType,
             msg: match ? match[3] : cleanLine,
           };
@@ -270,19 +282,37 @@ const CrashReports = () => {
   const handleCopy = async (reportName: string) => {
     if (!activeServer) return;
     try {
-      const res = await fetch(`/api/servers/${activeServer.id}/crash-reports/${encodeURIComponent(reportName)}`);
-      if (!res.ok) throw new Error('Failed to read crash report');
-      const text = await res.text();
-      await navigator.clipboard.writeText(text);
-      toast.success('Crash report copied to clipboard');
-    } catch (err) {
+      const res = await fetch(`/api/servers/${activeServer.id}/crash-reports/${encodeURIComponent(reportName)}/copy`, {
+        method: 'POST',
+      });
+      if (!res.ok) throw new Error('Failed to copy crash report');
+      toast.success('Crash report copy created');
+      fetchReports();
+    } catch {
       toast.error('Failed to copy crash report');
     }
   };
 
-  const handleDownload = (reportName: string) => {
+  const handleDownload = async (reportName: string) => {
     if (!activeServer) return;
-    window.open(`/api/servers/${activeServer.id}/crash-reports/${encodeURIComponent(reportName)}`, '_blank');
+    try {
+      const res = await fetch(`/api/servers/${activeServer.id}/crash-reports/${encodeURIComponent(reportName)}`);
+      if (!res.ok) throw new Error('Download failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = reportName;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        a.remove();
+        URL.revokeObjectURL(url);
+      }, 150);
+      toast.success('Downloaded crash report.');
+    } catch {
+      toast.error('Download failed, try again.');
+    }
   };
 
   const handleDelete = async (reportName: string) => {

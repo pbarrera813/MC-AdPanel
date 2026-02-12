@@ -83,9 +83,10 @@ function parseAnsi(line: string): AnsiSpan[] {
 const hasAnsi = (line: string) => /\x1b\[/.test(line);
 
 const normalizeLogTimestamp = (line: string) => {
-  const match = line.match(/\[(\d{2}):(\d{2}):(\d{2})\]/);
+  // Match [HH:MM:SS] or [HH:MM:SS LEVEL] (both Minecraft log formats)
+  const match = line.match(/\[(\d{2}):(\d{2}):(\d{2})([\s\]])/);
   if (!match) return line;
-  const [, hh, mm, ss] = match;
+  const [matched, hh, mm, ss, trailing] = match;
   const now = new Date();
   const utcDate = new Date(Date.UTC(
     now.getUTCFullYear(),
@@ -101,7 +102,7 @@ const normalizeLogTimestamp = (line: string) => {
     second: '2-digit',
     hour12: true,
   });
-  return line.replace(/\[(\d{2}):(\d{2}):(\d{2})\]/, `[${localTime}]`);
+  return line.replace(matched, `[${localTime}${trailing}`);
 };
 
 // Renders a single log line, with ANSI color support
