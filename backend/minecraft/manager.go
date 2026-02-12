@@ -2378,6 +2378,42 @@ func (m *Manager) ReadCrashReport(id, fileName string) ([]byte, error) {
 	return os.ReadFile(filePath)
 }
 
+// CopyCrashReport duplicates a crash report file with a "-copy" suffix
+func (m *Manager) CopyCrashReport(id, fileName string) (string, error) {
+	m.mu.RLock()
+	cfg, ok := m.configs[id]
+	m.mu.RUnlock()
+	if !ok {
+		return "", fmt.Errorf("server %s not found", id)
+	}
+
+	crashDir := filepath.Join(cfg.Dir, "crash-reports")
+	srcPath, err := SafePath(crashDir, fileName)
+	if err != nil {
+		return "", err
+	}
+
+	ext := filepath.Ext(fileName)
+	base := strings.TrimSuffix(fileName, ext)
+	copyName := base + "-copy" + ext
+
+	dstPath, err := SafePath(crashDir, copyName)
+	if err != nil {
+		return "", err
+	}
+
+	content, err := os.ReadFile(srcPath)
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.WriteFile(dstPath, content, 0644); err != nil {
+		return "", err
+	}
+
+	return copyName, nil
+}
+
 // DeleteCrashReport deletes a crash report file
 func (m *Manager) DeleteCrashReport(id, fileName string) error {
 	m.mu.RLock()

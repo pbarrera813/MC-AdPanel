@@ -79,6 +79,7 @@ func main() {
 	// Crash reports
 	mux.HandleFunc("GET /api/servers/{id}/crash-reports", crashHandler.List)
 	mux.HandleFunc("GET /api/servers/{id}/crash-reports/{name}", crashHandler.Read)
+	mux.HandleFunc("POST /api/servers/{id}/crash-reports/{name}/copy", crashHandler.Copy)
 	mux.HandleFunc("DELETE /api/servers/{id}/crash-reports/{name}", crashHandler.Delete)
 
 	// WebSocket route for console logs
