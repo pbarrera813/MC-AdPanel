@@ -208,6 +208,7 @@ func (m *Manager) CheckPluginUpdates(id string) ([]PluginUpdateInfo, error) {
 	}
 
 	mcVersion := cfg.Version
+	serverType := cfg.Type
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -228,7 +229,7 @@ func (m *Manager) CheckPluginUpdates(id string) ([]PluginUpdateInfo, error) {
 				return
 			}
 
-			info := checkSinglePlugin(ctx, p, mcVersion)
+			info := checkSinglePlugin(ctx, p, mcVersion, serverType)
 			results[idx] = info
 
 			pluginUpdateCache.mu.Lock()
@@ -244,7 +245,7 @@ func (m *Manager) CheckPluginUpdates(id string) ([]PluginUpdateInfo, error) {
 	return results, nil
 }
 
-func checkSinglePlugin(ctx context.Context, plugin PluginInfo, mcVersion string) PluginUpdateInfo {
+func checkSinglePlugin(ctx context.Context, plugin PluginInfo, mcVersion, serverType string) PluginUpdateInfo {
 	info := PluginUpdateInfo{
 		Name:          plugin.Name,
 		FileName:      plugin.FileName,
@@ -257,15 +258,17 @@ func checkSinglePlugin(ctx context.Context, plugin PluginInfo, mcVersion string)
 	}
 
 	// Try Modrinth first
-	if result := checkModrinth(ctx, plugin.Name, plugin.Version, mcVersion); result != nil {
+	if result := checkModrinth(ctx, plugin.Name, plugin.Version, mcVersion, serverType); result != nil {
 		result.FileName = plugin.FileName
 		return *result
 	}
 
-	// Fallback to Spiget
-	if result := checkSpiget(ctx, plugin.Name, plugin.Version); result != nil {
-		result.FileName = plugin.FileName
-		return *result
+	// Fallback to Spiget (only for plugin-based servers, not modded)
+	if !isModdedType(serverType) && !strings.EqualFold(serverType, "fabric") {
+		if result := checkSpiget(ctx, plugin.Name, plugin.Version); result != nil {
+			result.FileName = plugin.FileName
+			return *result
+		}
 	}
 
 	return info
@@ -283,6 +286,7 @@ type modrinthSearchResult struct {
 type modrinthVersion struct {
 	VersionNumber string   `json:"version_number"`
 	GameVersions  []string `json:"game_versions"`
+	Loaders       []string `json:"loaders"`
 	Files         []struct {
 		URL      string `json:"url"`
 		Filename string `json:"filename"`
@@ -290,7 +294,33 @@ type modrinthVersion struct {
 	} `json:"files"`
 }
 
-func checkModrinth(ctx context.Context, pluginName, currentVersion, mcVersion string) *PluginUpdateInfo {
+// loaderTagsForType returns the Modrinth loader tags that are compatible with the given server type.
+func loaderTagsForType(serverType string) []string {
+	switch strings.ToLower(serverType) {
+	case "paper":
+		return []string{"paper", "spigot", "bukkit"}
+	case "spigot":
+		return []string{"spigot", "bukkit"}
+	case "purpur":
+		return []string{"purpur", "paper", "spigot", "bukkit"}
+	case "folia":
+		return []string{"folia", "paper", "spigot", "bukkit"}
+	case "fabric":
+		return []string{"fabric"}
+	case "forge":
+		return []string{"forge"}
+	case "neoforge":
+		return []string{"neoforge"}
+	case "velocity":
+		return []string{"velocity"}
+	case "waterfall":
+		return []string{"waterfall", "bungeecord"}
+	default:
+		return nil
+	}
+}
+
+func checkModrinth(ctx context.Context, pluginName, currentVersion, mcVersion, serverType string) *PluginUpdateInfo {
 	// Search for the plugin on Modrinth
 	searchURL := fmt.Sprintf("https://api.modrinth.com/v2/search?query=%s&limit=5", url.QueryEscape(pluginName))
 
@@ -326,11 +356,28 @@ func checkModrinth(ctx context.Context, pluginName, currentVersion, mcVersion st
 		return nil
 	}
 
-	// Find latest compatible version
+	// Find latest compatible version (matching both MC version and loader)
+	allowedLoaders := loaderTagsForType(serverType)
 	var latestCompatible *modrinthVersion
 	var latestAny *modrinthVersion
 	for i := range versions {
 		v := &versions[i]
+		// Check if this version matches the server's loader
+		loaderMatch := len(allowedLoaders) == 0 // if no loader tags, accept all
+		for _, vl := range v.Loaders {
+			for _, al := range allowedLoaders {
+				if strings.EqualFold(vl, al) {
+					loaderMatch = true
+					break
+				}
+			}
+			if loaderMatch {
+				break
+			}
+		}
+		if !loaderMatch {
+			continue
+		}
 		if latestAny == nil {
 			latestAny = v
 		}
