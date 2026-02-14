@@ -13,7 +13,7 @@ export const PlayerList = ({ server }: PlayerListProps) => {
   const [players, setPlayers] = useState<Player[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('');
-  const [pingStatus, setPingStatus] = useState<'supported' | 'missing_pingplayer' | 'modded'>('supported');
+  const [pingStatus, setPingStatus] = useState<'supported' | 'missing_pingplayer' | 'missing_pingplayer_mod'>('supported');
 
   const fetchPlayers = useCallback(async () => {
     try {
@@ -27,8 +27,8 @@ export const PlayerList = ({ server }: PlayerListProps) => {
         setPlayers(data.players || []);
         if (data.pingSupported) {
           setPingStatus('supported');
-        } else if (data.pingStatus === 'modded') {
-          setPingStatus('modded');
+        } else if (data.pingStatus === 'missing_pingplayer_mod') {
+          setPingStatus('missing_pingplayer_mod');
         } else {
           setPingStatus('missing_pingplayer');
         }
@@ -103,8 +103,8 @@ export const PlayerList = ({ server }: PlayerListProps) => {
     return 'bg-red-600';
   };
 
-  const pingHelpText = pingStatus === 'modded'
-    ? 'Incompatible function, see the ping in-game'
+  const pingHelpText = pingStatus === 'missing_pingplayer_mod'
+    ? 'Install the PlayerPing mod for this to work.'
     : 'Unable to show ping, install pingplayer plugin in order to be able to see player\'s ping';
 
   return (
@@ -175,10 +175,7 @@ export const PlayerList = ({ server }: PlayerListProps) => {
                             -
                           </div>
                         </TooltipTrigger>
-                        <TooltipContent className={clsx(
-                          "bg-[#252524] border border-[#3a3a3a] px-3 py-2",
-                          pingStatus === 'modded' ? 'text-yellow-400' : 'text-gray-200'
-                        )}>
+                        <TooltipContent className="bg-[#252524] border border-[#3a3a3a] px-3 py-2 text-gray-200">
                           {pingHelpText}
                         </TooltipContent>
                       </Tooltip>
