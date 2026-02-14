@@ -278,6 +278,26 @@ func hasPingPlayer(pluginsDir string) bool {
 	return false
 }
 
+func hasPingPlayerMod(modsDir string) bool {
+	entries, err := os.ReadDir(modsDir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := strings.ToLower(entry.Name())
+		if !strings.HasSuffix(name, ".jar") {
+			continue
+		}
+		if strings.Contains(name, "player-ping") || strings.Contains(name, "player_ping") || strings.Contains(name, "playerping") || strings.Contains(name, "pingplayer") {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Manager) refreshPingSupport(id string) {
 	m.mu.RLock()
 	cfg := m.configs[id]
@@ -288,9 +308,15 @@ func (m *Manager) refreshPingSupport(id string) {
 	}
 
 	if isModdedType(cfg.Type) {
+		modsDir := filepath.Join(cfg.Dir, "mods")
+		supported := hasPingPlayerMod(modsDir)
 		rs.mu.Lock()
-		rs.pingSupported = false
-		rs.pingDisabledReason = "modded"
+		rs.pingSupported = supported
+		if supported {
+			rs.pingDisabledReason = ""
+		} else {
+			rs.pingDisabledReason = "missing_pingplayer_mod"
+		}
 		rs.mu.Unlock()
 		return
 	}
@@ -2167,10 +2193,6 @@ func (m *Manager) GetPingSupport(id string) (bool, string, error) {
 		return false, "", fmt.Errorf("server %s not found", id)
 	}
 
-	if isModdedType(cfg.Type) {
-		return false, "modded", nil
-	}
-
 	if rsOk {
 		rs.mu.RLock()
 		supported := rs.pingSupported
@@ -2179,6 +2201,14 @@ func (m *Manager) GetPingSupport(id string) (bool, string, error) {
 		if supported || reason != "" {
 			return supported, reason, nil
 		}
+	}
+
+	if isModdedType(cfg.Type) {
+		modsDir := filepath.Join(cfg.Dir, "mods")
+		if !hasPingPlayerMod(modsDir) {
+			return false, "missing_pingplayer_mod", nil
+		}
+		return true, "", nil
 	}
 
 	pluginsDir := filepath.Join(cfg.Dir, "plugins")
