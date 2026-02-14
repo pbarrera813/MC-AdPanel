@@ -24,17 +24,17 @@ import (
 
 // ServerConfig is what gets persisted to servers.json
 type ServerConfig struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	Type         string   `json:"type"`
-	Version      string   `json:"version"`
-	Port         int      `json:"port"`
-	JarFile      string   `json:"jarFile"`
-	MaxRAM       string   `json:"maxRam"`
-	MinRAM       string   `json:"minRam"`
-	MaxPlayers   int      `json:"maxPlayers"`
-	Dir          string   `json:"dir"`
-	StartCommand   []string `json:"startCommand,omitempty"`
+	ID                  string   `json:"id"`
+	Name                string   `json:"name"`
+	Type                string   `json:"type"`
+	Version             string   `json:"version"`
+	Port                int      `json:"port"`
+	JarFile             string   `json:"jarFile"`
+	MaxRAM              string   `json:"maxRam"`
+	MinRAM              string   `json:"minRam"`
+	MaxPlayers          int      `json:"maxPlayers"`
+	Dir                 string   `json:"dir"`
+	StartCommand        []string `json:"startCommand,omitempty"`
 	AutoStart           bool     `json:"autoStart"`
 	Flags               string   `json:"flags"`
 	AlwaysPreTouch      bool     `json:"alwaysPreTouch"`
@@ -44,23 +44,23 @@ type ServerConfig struct {
 
 // ServerInfo is the API-facing struct with runtime state
 type ServerInfo struct {
-	ID           string  `json:"id"`
-	Name         string  `json:"name"`
-	Type         string  `json:"type"`
-	Version      string  `json:"version"`
-	Status       string  `json:"status"`
-	CPU          float64 `json:"cpu"`
-	RAM          float64 `json:"ram"`
-	TPS          float64 `json:"tps"`
-	Port         int     `json:"port"`
-	MaxRAM       string  `json:"maxRam"`
-	MinRAM       string  `json:"minRam"`
-	MaxPlayers   int     `json:"maxPlayers"`
-	AutoStart      bool   `json:"autoStart"`
-	Flags          string `json:"flags"`
-	AlwaysPreTouch bool   `json:"alwaysPreTouch"`
-	InstallError   string `json:"installError,omitempty"`
-	FabricTpsAvailable bool `json:"fabricTpsAvailable,omitempty"`
+	ID                 string  `json:"id"`
+	Name               string  `json:"name"`
+	Type               string  `json:"type"`
+	Version            string  `json:"version"`
+	Status             string  `json:"status"`
+	CPU                float64 `json:"cpu"`
+	RAM                float64 `json:"ram"`
+	TPS                float64 `json:"tps"`
+	Port               int     `json:"port"`
+	MaxRAM             string  `json:"maxRam"`
+	MinRAM             string  `json:"minRam"`
+	MaxPlayers         int     `json:"maxPlayers"`
+	AutoStart          bool    `json:"autoStart"`
+	Flags              string  `json:"flags"`
+	AlwaysPreTouch     bool    `json:"alwaysPreTouch"`
+	InstallError       string  `json:"installError,omitempty"`
+	FabricTpsAvailable bool    `json:"fabricTpsAvailable,omitempty"`
 }
 
 // PluginInfo represents a plugin jar file
@@ -118,29 +118,29 @@ type CrashReport struct {
 
 // runningServer holds runtime state for a managed server
 type runningServer struct {
-	cmd               *exec.Cmd
-	stdin             io.WriteCloser
-	status            string
-	cpu               float64
-	ram               float64
-	tps               float64
-	pid               int
-	logBuffer         []string
-	subscribers       []chan string
-	players           map[string]*onlinePlayer
-	pingBlocked       map[string]bool
-	lastPingPlayer    string
-	restartTimer      *time.Timer
-	restartAt         time.Time
-	installError      string
-	lastTpsCmd        time.Time
-	lastPlayerInfoCmd time.Time
-	lastPingCmd       time.Time
-	pingSupported     bool
+	cmd                *exec.Cmd
+	stdin              io.WriteCloser
+	status             string
+	cpu                float64
+	ram                float64
+	tps                float64
+	pid                int
+	logBuffer          []string
+	subscribers        []chan string
+	players            map[string]*onlinePlayer
+	pingBlocked        map[string]bool
+	lastPingPlayer     string
+	restartTimer       *time.Timer
+	restartAt          time.Time
+	installError       string
+	lastTpsCmd         time.Time
+	lastPlayerInfoCmd  time.Time
+	lastPingCmd        time.Time
+	pingSupported      bool
 	pingDisabledReason string
-	safeModeDisabled  []string // dirs renamed for safe mode (original paths)
-	mu                sync.RWMutex
-	stopMetrics       chan struct{}
+	safeModeDisabled   []string // dirs renamed for safe mode (original paths)
+	mu                 sync.RWMutex
+	stopMetrics        chan struct{}
 }
 
 const maxLogBuffer = 500
@@ -148,20 +148,20 @@ const logTrimSize = 100
 
 // Regex patterns for player tracking and server info
 var (
-	joinPattern      = regexp.MustCompile(`([a-zA-Z0-9_]+)\[/([0-9.]+):\d+\] logged in`)
-	leavePattern     = regexp.MustCompile(`([a-zA-Z0-9_]+) left the game`)
-	ansiPattern      = regexp.MustCompile(`\x1b\[[0-9;]*m`)
-	mcColorPattern   = regexp.MustCompile(`§[0-9a-fk-or]`)
-	nameSanitize     = regexp.MustCompile(`[^a-zA-Z0-9_\-.]`)
-	tpsPattern       = regexp.MustCompile(`TPS from last 1m, 5m, 15m: \*?([0-9.]+)`)
-	forgeTpsPattern  = regexp.MustCompile(`(?i)overall:.*TPS:\s*([0-9.]+)`)
-	simpleTpsPattern = regexp.MustCompile(`(?i)\bTPS[:=]\s*([0-9.]+)`)
-	dimensionPattern = regexp.MustCompile(`(\w+) has the following entity data: "minecraft:(\w+)"`)
-	listPattern      = regexp.MustCompile(`There are (\d+) of a max of (\d+) players online:\s*(.*)`)
-	pingPattern1     = regexp.MustCompile(`(?i)ping of ([a-zA-Z0-9_]+) (?:is|was) ([0-9]+)`)
-	pingPattern2     = regexp.MustCompile(`(?i)([a-zA-Z0-9_]+)'?s ping(?: is|:)? ([0-9]+)`)
-	pingPattern3     = regexp.MustCompile(`(?i)([a-zA-Z0-9_]+) has (?:a )?ping(?: of)? ([0-9]+)`)
-	pingPattern4     = regexp.MustCompile(`(?i)([a-zA-Z0-9_]+)'s latency is ([0-9]+)\s*ms`)
+	joinPattern         = regexp.MustCompile(`([a-zA-Z0-9_]+)\[/([0-9.]+):\d+\] logged in`)
+	leavePattern        = regexp.MustCompile(`([a-zA-Z0-9_]+) left the game`)
+	ansiPattern         = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	mcColorPattern      = regexp.MustCompile(`§[0-9a-fk-or]`)
+	nameSanitize        = regexp.MustCompile(`[^a-zA-Z0-9_\-.]`)
+	tpsPattern          = regexp.MustCompile(`TPS from last 1m, 5m, 15m: \*?([0-9.]+)`)
+	forgeTpsPattern     = regexp.MustCompile(`(?i)overall:.*TPS:\s*([0-9.]+)`)
+	simpleTpsPattern    = regexp.MustCompile(`(?i)\bTPS[:=]\s*([0-9.]+)`)
+	dimensionPattern    = regexp.MustCompile(`(\w+) has the following entity data: "minecraft:(\w+)"`)
+	listPattern         = regexp.MustCompile(`There are (\d+) of a max of (\d+) players online:\s*(.*)`)
+	pingPattern1        = regexp.MustCompile(`(?i)ping of ([a-zA-Z0-9_]+) (?:is|was) ([0-9]+)`)
+	pingPattern2        = regexp.MustCompile(`(?i)([a-zA-Z0-9_]+)'?s ping(?: is|:)? ([0-9]+)`)
+	pingPattern3        = regexp.MustCompile(`(?i)([a-zA-Z0-9_]+) has (?:a )?ping(?: of)? ([0-9]+)`)
+	pingPattern4        = regexp.MustCompile(`(?i)([a-zA-Z0-9_]+)'s latency is ([0-9]+)\s*ms`)
 	pingNotFoundPattern = regexp.MustCompile(`(?i)player not found or offline`)
 )
 
@@ -227,7 +227,7 @@ func tpsCommandForType(serverType string) (string, bool) {
 	case "forge", "neoforge":
 		return "forge tps", true
 	case "fabric":
-		return "tps", true
+		return "fabric tps", true
 	default:
 		return "", false
 	}
@@ -341,9 +341,9 @@ func NewManager(baseDir string) (*Manager, error) {
 
 	for id := range mgr.configs {
 		mgr.running[id] = &runningServer{
-			status:    "Stopped",
-			logBuffer: make([]string, 0),
-			players:   make(map[string]*onlinePlayer),
+			status:      "Stopped",
+			logBuffer:   make([]string, 0),
+			players:     make(map[string]*onlinePlayer),
 			pingBlocked: make(map[string]bool),
 		}
 	}
@@ -729,32 +729,32 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 		clean = mcColorPattern.ReplaceAllString(clean, "")
 		clean = strings.TrimRight(clean, " \r")
 
-	rs.mu.Lock()
-	if strings.Contains(clean, "Done (") && strings.Contains(clean, "! For help,") {
-		rs.status = "Running"
-		cfg := m.configs[id]
-		if cfg != nil {
-			log.Printf("[%s] Server is now running", cfg.Name)
+		rs.mu.Lock()
+		if strings.Contains(clean, "Done (") && strings.Contains(clean, "! For help,") {
+			rs.status = "Running"
+			cfg := m.configs[id]
+			if cfg != nil {
+				log.Printf("[%s] Server is now running", cfg.Name)
+			}
 		}
-	}
 
-	if matches := joinPattern.FindStringSubmatch(clean); len(matches) >= 3 {
-		playerName := matches[1]
-		playerIP := matches[2]
-		rs.players[playerName] = &onlinePlayer{
-			Name:     playerName,
-			IP:       playerIP,
-			Ping:     -1,
-			JoinedAt: time.Now(),
+		if matches := joinPattern.FindStringSubmatch(clean); len(matches) >= 3 {
+			playerName := matches[1]
+			playerIP := matches[2]
+			rs.players[playerName] = &onlinePlayer{
+				Name:     playerName,
+				IP:       playerIP,
+				Ping:     -1,
+				JoinedAt: time.Now(),
+			}
+			delete(rs.pingBlocked, playerName)
 		}
-		delete(rs.pingBlocked, playerName)
-	}
 
-	if matches := leavePattern.FindStringSubmatch(clean); len(matches) >= 2 {
-		playerName := matches[1]
-		delete(rs.players, playerName)
-		delete(rs.pingBlocked, playerName)
-	}
+		if matches := leavePattern.FindStringSubmatch(clean); len(matches) >= 2 {
+			playerName := matches[1]
+			delete(rs.players, playerName)
+			delete(rs.pingBlocked, playerName)
+		}
 
 		// Parse TPS response
 		suppressLine := false
@@ -912,7 +912,6 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 		}
 	}
 }
-
 
 // collectMetrics periodically reads CPU and RAM usage, and polls TPS
 func (m *Manager) collectMetrics(id string, rs *runningServer) {
@@ -1244,14 +1243,14 @@ func (m *Manager) serverInfo(id string) *ServerInfo {
 	rs := m.running[id]
 
 	info := &ServerInfo{
-		ID:         cfg.ID,
-		Name:       cfg.Name,
-		Type:       cfg.Type,
-		Version:    cfg.Version,
-		Port:       cfg.Port,
-		MaxRAM:     cfg.MaxRAM,
-		MinRAM:     cfg.MinRAM,
-		MaxPlayers: cfg.MaxPlayers,
+		ID:             cfg.ID,
+		Name:           cfg.Name,
+		Type:           cfg.Type,
+		Version:        cfg.Version,
+		Port:           cfg.Port,
+		MaxRAM:         cfg.MaxRAM,
+		MinRAM:         cfg.MinRAM,
+		MaxPlayers:     cfg.MaxPlayers,
 		AutoStart:      cfg.AutoStart,
 		Flags:          cfg.Flags,
 		AlwaysPreTouch: cfg.AlwaysPreTouch,
