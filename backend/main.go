@@ -46,6 +46,7 @@ func main() {
 	fileHandler := handlers.NewFileHandler(mgr)
 	playerHandler := handlers.NewPlayerHandler(mgr)
 	crashHandler := handlers.NewCrashReportHandler(mgr)
+	logHandler := handlers.NewLogHandler(mgr)
 	versionHandler := handlers.NewVersionHandler(mgr)
 	settingsHandler := handlers.NewSettingsHandler(mgr)
 
@@ -82,8 +83,12 @@ func main() {
 	mux.HandleFunc("POST /api/servers/{id}/crash-reports/{name}/copy", crashHandler.Copy)
 	mux.HandleFunc("DELETE /api/servers/{id}/crash-reports/{name}", crashHandler.Delete)
 
-	// WebSocket route for console logs
+	// WebSocket route for console logs (live streaming)
 	mux.Handle("GET /api/logs/{id}", mcHandler.WebSocketLogs())
+
+	// HTTP routes to list/read saved log files when server is offline
+	mux.HandleFunc("GET /api/servers/{id}/logs", logHandler.List)
+	mux.HandleFunc("GET /api/servers/{id}/logs/{name}", logHandler.Read)
 
 	// Plugin management
 	mux.HandleFunc("GET /api/servers/{id}/plugins", pluginHandler.List)

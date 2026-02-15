@@ -2,6 +2,8 @@ package minecraft
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -1646,9 +1648,15 @@ func (m *Manager) TogglePlugin(id, fileName string) (*PluginInfo, error) {
 	pluginsDir := extensionsDir(cfg)
 
 	if strings.HasSuffix(fileName, ".disabled") {
-		oldPath := filepath.Join(pluginsDir, fileName)
+		oldPath, err := SafePath(pluginsDir, fileName)
+		if err != nil {
+			return nil, err
+		}
 		newName := strings.TrimSuffix(fileName, ".disabled")
-		newPath := filepath.Join(pluginsDir, newName)
+		newPath, err := SafePath(pluginsDir, newName)
+		if err != nil {
+			return nil, err
+		}
 		if err := os.Rename(oldPath, newPath); err != nil {
 			return nil, err
 		}
@@ -1665,9 +1673,15 @@ func (m *Manager) TogglePlugin(id, fileName string) (*PluginInfo, error) {
 		}, nil
 	}
 
-	oldPath := filepath.Join(pluginsDir, fileName)
+	oldPath, err := SafePath(pluginsDir, fileName)
+	if err != nil {
+		return nil, err
+	}
 	newName := fileName + ".disabled"
-	newPath := filepath.Join(pluginsDir, newName)
+	newPath, err := SafePath(pluginsDir, newName)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.Rename(oldPath, newPath); err != nil {
 		return nil, err
 	}
@@ -2405,6 +2419,94 @@ func (m *Manager) ReadCrashReport(id, fileName string) ([]byte, error) {
 	}
 
 	return os.ReadFile(filePath)
+}
+
+// ============================================================
+// Log files (view when server is stopped)
+// ============================================================
+
+// ListLogFiles returns files under the server's logs/ directory
+func (m *Manager) ListLogFiles(id string) ([]FileEntry, error) {
+	m.mu.RLock()
+	cfg, ok := m.configs[id]
+	m.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("server %s not found", id)
+	}
+
+	logsDir := filepath.Join(cfg.Dir, "logs")
+	entries, err := os.ReadDir(logsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []FileEntry{}, nil
+		}
+		return nil, err
+	}
+
+	files := make([]FileEntry, 0)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		// include common log file types: .log, .txt, .gz
+		if !(strings.HasSuffix(strings.ToLower(name), ".log") || strings.HasSuffix(strings.ToLower(name), ".txt") || strings.HasSuffix(strings.ToLower(name), ".gz")) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, FileEntry{
+			Name:    name,
+			Type:    "file",
+			Size:    formatFileSize(info.Size()),
+			ModTime: info.ModTime().UTC().Format(time.RFC3339),
+		})
+	}
+
+	// sort newest first by modtime
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].ModTime > files[j].ModTime
+	})
+
+	return files, nil
+}
+
+// ReadLogFile returns the (possibly decompressed) content of a log file
+func (m *Manager) ReadLogFile(id, fileName string) ([]byte, error) {
+	m.mu.RLock()
+	cfg, ok := m.configs[id]
+	m.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("server %s not found", id)
+	}
+
+	filePath, err := SafePath(filepath.Join(cfg.Dir, "logs"), fileName)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	// If gzipped, attempt to decompress
+	if strings.HasSuffix(strings.ToLower(fileName), ".gz") {
+		r, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		defer r.Close()
+		out, err := io.ReadAll(r)
+		if err != nil {
+			return nil, err
+		}
+		return out, nil
+	}
+
+	return data, nil
 }
 
 // CopyCrashReport duplicates a crash report file with a "-copy" suffix

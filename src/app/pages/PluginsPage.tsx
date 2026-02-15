@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useServer, Plugin } from '../context/ServerContext';
-import { Upload, Trash2, RefreshCw, AlertTriangle, CheckCircle, XCircle, Loader2, ArrowDownCircle, Search, Check, Square } from 'lucide-react';
+import { Upload, Trash2, RefreshCw, AlertTriangle, CheckCircle, XCircle, Loader2, ArrowDownCircle, Cloud, Check, Square } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../components/ui/tooltip';
@@ -31,6 +31,8 @@ export const PluginsPage = () => {
   const [pendingUpdate, setPendingUpdate] = useState<PluginWithUpdate | null>(null);
   const [selectedPlugins, setSelectedPlugins] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [stickyUpdates, setStickyUpdates] = useState<Record<string, Partial<PluginWithUpdate>>>({});
+  const [batchDeleteConfirmPlugins, setBatchDeleteConfirmPlugins] = useState(false);
 
   const isServerOff = activeServer?.status === 'Stopped' || activeServer?.status === 'Crashed' || activeServer?.status === 'Error';
 
@@ -46,13 +48,15 @@ export const PluginsPage = () => {
       const res = await fetch(`/api/servers/${id}/plugins`);
       if (!res.ok) throw new Error('Failed to fetch plugins');
       const data: PluginWithUpdate[] = await res.json();
-      setPlugins(data || []);
+      // Merge sticky update info so "download update" buttons remain visible until user leaves
+      const merged = (data || []).map(p => ({ ...p, ...(stickyUpdates[p.fileName] || {}) }));
+      setPlugins(merged);
     } catch (err) {
       console.error('Failed to fetch plugins:', err);
     } finally {
       setLoading(false);
     }
-  }, [activeServerId]);
+  }, [activeServerId, stickyUpdates]);
 
   useEffect(() => {
     fetchPlugins(activeServerId);
@@ -62,6 +66,7 @@ export const PluginsPage = () => {
     setUpdatesChecked(false);
     setLastCheckedAt(null);
     setSelectedPlugins(new Set());
+    setStickyUpdates({});
   }, [activeServerId]);
 
   useEscapeKey(isUploadModalOpen, () => setIsUploadModalOpen(false));
@@ -74,6 +79,8 @@ export const PluginsPage = () => {
     const res = await fetch(`/api/servers/${activeServerId}/plugins/check-updates`);
     if (!res.ok) throw new Error('Failed to check updates');
     const results = await res.json();
+
+    // Merge update info into current list and keep a sticky map so actions remain visible
     setPlugins(prev => prev.map(plugin => {
       const update = results.find((r: PluginWithUpdate) => r.fileName === plugin.fileName);
       if (update) {
@@ -86,6 +93,15 @@ export const PluginsPage = () => {
       }
       return plugin;
     }));
+
+    const sticky: Record<string, Partial<PluginWithUpdate>> = {};
+    (results as PluginWithUpdate[]).forEach(r => {
+      if (r.versionStatus === 'outdated' && r.updateUrl) {
+        sticky[r.fileName] = { latestVersion: r.latestVersion, versionStatus: r.versionStatus, updateUrl: r.updateUrl };
+      }
+    });
+    setStickyUpdates(prev => ({ ...prev, ...sticky }));
+
     setUpdatesChecked(true);
     setLastCheckedAt(new Date());
     return results as PluginWithUpdate[];
@@ -119,6 +135,44 @@ export const PluginsPage = () => {
       fetchPlugins();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : `Failed to toggle ${itemLabel}`);
+    }
+  };
+
+  const handleDisableSelected = async () => {
+    if (!activeServer || selectedPlugins.size === 0) return;
+    setUpdatingAll(true);
+    try {
+      const toDisable = plugins.filter(p => selectedPlugins.has(p.fileName) && p.enabled);
+      if (toDisable.length === 0) {
+        toast.info('No enabled items in selection');
+        return;
+      }
+      for (const p of toDisable) {
+        const res = await fetch(`/api/servers/${activeServer.id}/plugins/${encodeURIComponent(p.fileName)}/toggle`, { method: 'PUT' });
+        if (!res.ok) throw new Error(`Failed to disable ${p.fileName}`);
+      }
+      toast.success(`Disabled ${toDisable.length} ${toDisable.length === 1 ? itemLabel : itemLabelPlural}`);
+      setSelectedPlugins(new Set());
+      fetchPlugins();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to disable selected');
+    } finally {
+      setUpdatingAll(false);
+    }
+  };
+
+  const handleDeleteSelected = async () => {
+    if (!activeServer || selectedPlugins.size === 0) return;
+    try {
+      for (const name of Array.from(selectedPlugins)) {
+        const res = await fetch(`/api/servers/${activeServer.id}/plugins/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error(`Failed to delete ${name}`);
+      }
+      toast.success(`${selectedPlugins.size} ${itemLabelPlural} deleted`);
+      setSelectedPlugins(new Set());
+      fetchPlugins();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete selected');
     }
   };
 
@@ -206,6 +260,12 @@ export const PluginsPage = () => {
       setRestartPromptOpen(false);
       return;
     }
+    // Require server to be stopped before applying update to avoid corrupting plugin data
+    if (!isServerOff) {
+      toast.error('Stop the server before applying updates to avoid data corruption');
+      setRestartPromptOpen(false);
+      return;
+    }
     setRestartPromptOpen(false);
     await runSingleUpdate(pendingUpdate);
   };
@@ -222,6 +282,13 @@ export const PluginsPage = () => {
 
   const confirmUpdateAll = async () => {
     if (!activeServer) {
+      setUpdateAllPromptOpen(false);
+      return;
+    }
+
+    // Require server to be stopped before applying updates
+    if (!isServerOff) {
+      toast.error('Stop the server before applying updates to avoid data corruption');
       setUpdateAllPromptOpen(false);
       return;
     }
@@ -412,18 +479,11 @@ export const PluginsPage = () => {
   }
 
   const outdatedPlugins = plugins.filter(p => p.versionStatus === 'outdated' && p.updateUrl);
-  const showUpdateAll = updatesChecked && outdatedPlugins.length > 1;
   const hasSelection = selectedPlugins.size > 0;
   const allSelected = hasSelection && selectedPlugins.size === plugins.length;
 
   // Dynamic button label based on selection
-  const mainActionLabel = hasSelection
-    ? (allSelected ? 'Update all' : `Update selected`)
-    : (showUpdateAll ? 'Update all' : 'Check for updates');
 
-  const mainActionHandler = hasSelection
-    ? handleUpdateSelected
-    : (showUpdateAll ? handleUpdateAll : handleCheckUpdates);
 
   return (
     <div className="flex-1 p-4 md:p-8 overflow-y-auto">
@@ -438,20 +498,47 @@ export const PluginsPage = () => {
               Last checked: {lastCheckedAt.toLocaleString()}
             </span>
           )}
+
+          {/* Check for updates (cloud) */}
           <button
-            onClick={mainActionHandler}
-            disabled={checkingUpdates || updatingAll}
+            onClick={handleCheckUpdates}
+            disabled={checkingUpdates}
             className="flex items-center gap-2 px-4 py-2 bg-[#252524] border border-[#404040] text-gray-200 rounded font-medium hover:bg-[#333] transition-colors disabled:opacity-50"
           >
-            {checkingUpdates || updatingAll ? (
-              <Loader2 size={18} className="animate-spin" />
-            ) : hasSelection || showUpdateAll ? (
-              <ArrowDownCircle size={18} />
-            ) : (
-              <Search size={18} />
-            )}
-            {checkingUpdates ? 'Checking...' : updatingAll ? 'Updating...' : mainActionLabel}
+            {checkingUpdates ? <Loader2 size={18} className="animate-spin" /> : <Cloud size={18} />}
+            {checkingUpdates ? 'Checking...' : 'Check for updates'}
           </button>
+
+          {/* Update all / Update selected (appears after check or when selection exists) */}
+          {(updatesChecked && outdatedPlugins.length > 0) || hasSelection ? (
+            <button
+              onClick={hasSelection ? handleUpdateSelected : handleUpdateAll}
+              disabled={updatingAll}
+              className="flex items-center gap-2 px-4 py-2 bg-[#252524] border border-[#404040] text-gray-200 rounded font-medium hover:bg-[#333] transition-colors disabled:opacity-50"
+            >
+              {updatingAll ? <Loader2 size={18} className="animate-spin" /> : <ArrowDownCircle size={18} />}
+              {hasSelection ? (allSelected ? 'Update all' : 'Update selected') : 'Update all'}
+            </button>
+          ) : null}
+
+          {/* Multi-actions when selection exists */}
+          {hasSelection && (
+            <>
+              <button
+                onClick={() => handleDisableSelected()}
+                className="flex items-center gap-2 px-4 py-2 bg-[#333] border border-[#404040] text-gray-200 rounded font-medium hover:bg-[#444] transition-colors"
+              >
+                <XCircle size={16} /> Disable Selected ({selectedPlugins.size})
+              </button>
+              <button
+                onClick={() => setBatchDeleteConfirmPlugins(true)}
+                className="flex items-center gap-2 px-4 py-2 rounded font-bold border border-red-500 text-red-400 hover:bg-red-900/20 transition-colors"
+              >
+                <Trash2 size={16} /> Delete Selected ({selectedPlugins.size})
+              </button>
+            </>
+          )}
+
           <button
             onClick={() => fetchPlugins()}
             className="flex items-center gap-2 px-4 py-2 bg-[#252524] border border-[#404040] text-gray-200 rounded font-medium hover:bg-[#333] transition-colors"
@@ -549,14 +636,29 @@ export const PluginsPage = () => {
                           </button>
                         )}
                         <button
-                          onClick={(e) => { e.stopPropagation(); handleToggle(plugin.fileName); }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            // If user has a multi-selection and this plugin is part of it, act on the whole selection
+                            if (selectedPlugins.size > 0 && selectedPlugins.has(plugin.fileName)) {
+                              handleDisableSelected();
+                            } else {
+                              handleToggle(plugin.fileName);
+                            }
+                          }}
                           className="p-2 hover:bg-[#333] text-gray-300 rounded"
                           title={plugin.enabled ? 'Disable' : 'Enable'}
                         >
                           {plugin.enabled ? <XCircle size={18} /> : <CheckCircle size={18} />}
                         </button>
                         <button
-                          onClick={(e) => { e.stopPropagation(); setDeleteTarget(plugin.fileName); }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (selectedPlugins.size > 0 && selectedPlugins.has(plugin.fileName)) {
+                              setBatchDeleteConfirmPlugins(true);
+                            } else {
+                              setDeleteTarget(plugin.fileName);
+                            }
+                          }}
                           className="p-2 hover:bg-red-900/30 text-red-400 rounded"
                           title="Delete"
                         >
@@ -647,6 +749,31 @@ export const PluginsPage = () => {
         )}
       </AnimatePresence>
 
+      {/* Batch Delete Selected Plugins */}
+      <AnimatePresence>
+        {batchDeleteConfirmPlugins && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setBatchDeleteConfirmPlugins(false)}>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-md bg-[#252524] border border-red-900/50 rounded-lg shadow-2xl p-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3 text-red-500 mb-4">
+                <AlertTriangle size={24} />
+                <h3 className="text-xl font-bold">Delete {selectedPlugins.size} {itemLabelCap}{selectedPlugins.size > 1 ? 's' : ''}?</h3>
+              </div>
+              <p className="text-gray-300 mb-6">Are you sure you want to delete the selected {itemLabelPlural}? This action cannot be undone.</p>
+              <div className="flex justify-end gap-3">
+                <button onClick={() => setBatchDeleteConfirmPlugins(false)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
+                <button onClick={() => { setBatchDeleteConfirmPlugins(false); handleDeleteSelected(); }} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Delete</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Restart Needed (Single Update) */}
       <AnimatePresence>
         {restartPromptOpen && !isServerOff && (
@@ -657,8 +784,8 @@ export const PluginsPage = () => {
               exit={{ opacity: 0, scale: 0.95 }}
               className="w-full max-w-md bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6"
             >
-              <h3 className="text-xl font-bold text-white mb-3">Restart Required</h3>
-              <p className="text-gray-300 mb-6">A server restart is required for the updates to take effect.</p>
+              <h3 className="text-xl font-bold text-white mb-3">Stop server to apply update</h3>
+              <p className="text-gray-300 mb-6">Stop the server first to avoid corrupting plugin data. After stopping you can apply updates from this UI.</p>
               <div className="flex justify-end gap-3">
                 <button
                   onClick={() => { setRestartPromptOpen(false); setPendingUpdate(null); }}
@@ -690,8 +817,8 @@ export const PluginsPage = () => {
               exit={{ opacity: 0, scale: 0.95 }}
               className="w-full max-w-md bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6"
             >
-              <h3 className="text-xl font-bold text-white mb-3">Restart Required</h3>
-              <p className="text-gray-300 mb-6">A server restart is required for the updates to take effect.</p>
+              <h3 className="text-xl font-bold text-white mb-3">Stop server to apply updates</h3>
+              <p className="text-gray-300 mb-6">Stop the server first to avoid corrupting plugin data. After stopping you can apply updates from this UI.</p>
               <div className="flex justify-end gap-3">
                 <button
                   onClick={() => setUpdateAllPromptOpen(false)}

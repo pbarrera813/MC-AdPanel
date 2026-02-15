@@ -478,6 +478,7 @@ func checkSpiget(ctx context.Context, pluginName, currentVersion string) *Plugin
 
 // UpdatePlugin downloads a new version of a plugin from a URL and replaces the old JAR
 func (m *Manager) UpdatePlugin(id, fileName, downloadURL string) (*PluginInfo, error) {
+	// Validate server exists and that plugin path is safe
 	m.mu.RLock()
 	cfg, ok := m.configs[id]
 	m.mu.RUnlock()
@@ -485,8 +486,18 @@ func (m *Manager) UpdatePlugin(id, fileName, downloadURL string) (*PluginInfo, e
 		return nil, fmt.Errorf("server %s not found", id)
 	}
 
+	// Disallow updating while server is running to avoid file-locks / corruption
+	status, _ := m.GetStatus(id)
+	if status != nil && (status.Status == "Running" || status.Status == "Booting") {
+		return nil, fmt.Errorf("cannot update plugins while server is running; stop the server first")
+	}
+
 	pDir := extensionsDir(cfg)
-	jarPath := filepath.Join(pDir, filepath.Base(fileName))
+	// Use SafePath to prevent traversal and ensure jar is inside the extensions dir
+	jarPath, err := SafePath(pDir, filepath.Base(fileName))
+	if err != nil {
+		return nil, fmt.Errorf("invalid plugin path: %w", err)
+	}
 
 	// Verify the plugin file exists
 	if _, err := os.Stat(jarPath); os.IsNotExist(err) {

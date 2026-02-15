@@ -8,6 +8,42 @@ import { useEscapeKey } from '../hooks/useEscapeKey';
 
 type LogTab = 'live' | 'crash-reports';
 
+// copyToClipboard: prefer Clipboard API, fall back to execCommand/textarea for older browsers
+async function copyToClipboard(text: string) {
+  if (!text) throw new Error('No text to copy');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch (err) {
+      // continue to fallback
+    }
+  }
+
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'absolute';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+
+  const sel = document.getSelection();
+  const prevRange = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+  ta.select();
+
+  try {
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    if (prevRange && sel) { sel.removeAllRanges(); sel.addRange(prevRange); }
+    if (!ok) throw new Error('execCommand failed');
+    return;
+  } catch (err) {
+    document.body.removeChild(ta);
+    if (prevRange && sel) { sel.removeAllRanges(); sel.addRange(prevRange); }
+    throw err;
+  }
+}
+
 export const LogsPage = () => {
   const { activeServer } = useServer();
   const [activeTab, setActiveTab] = useState<LogTab>('live');
@@ -46,8 +82,241 @@ interface ParsedLog {
   msg: string;
 }
 
+interface ServerFile {
+  name: string;
+  type: string;
+  size: string;
+  modTime: string;
+}
+
+// StoredLogs: shows files under /logs and allows one-click select + double-click open
+const StoredLogs = ({ serverId }: { serverId: string }) => {
+  const [files, setFiles] = useState<ServerFile[]>([]);
+  const [loadingFiles, setLoadingFiles] = useState(true);
+  const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
+  const [viewer, setViewer] = useState<{ name: string | null; content: string | null }>({ name: null, content: null });
+  const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
+
+  const fetchFiles = useCallback(async () => {
+    setLoadingFiles(true);
+    try {
+      const res = await fetch(`/api/servers/${serverId}/logs`);
+      if (!res.ok) throw new Error('Failed to fetch logs');
+      const data: ServerFile[] = await res.json();
+      setFiles(data);
+    } catch (err) {
+      console.error('Failed to fetch logs:', err);
+    } finally {
+      setLoadingFiles(false);
+    }
+  }, [serverId]);
+
+  useEffect(() => { fetchFiles(); }, [fetchFiles]);
+
+  const handleToggleFile = (name: string) => {
+    setSelectedFiles(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
+  };
+
+  const openFile = async (name: string) => {
+    try {
+      const res = await fetch(`/api/servers/${serverId}/logs/${encodeURIComponent(name)}`);
+      if (!res.ok) throw new Error('Failed to fetch file');
+      const text = await res.text();
+      setViewer({ name, content: text });
+    } catch (err) {
+      toast.error('Failed to open log file');
+    }
+  };
+
+  const downloadFile = async (name: string) => {
+    try {
+      const res = await fetch(`/api/servers/${serverId}/logs/${encodeURIComponent(name)}`);
+      if (!res.ok) throw new Error('Download failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 150);
+      toast.success('Downloaded log file.');
+    } catch {
+      toast.error('Download failed');
+    }
+  };
+
+  const deleteFile = async (name: string) => {
+    try {
+      const path = `logs/${name}`;
+      const res = await fetch(`/api/servers/${serverId}/files?path=${encodeURIComponent(path)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Failed to delete');
+      toast.success('Log deleted');
+      setSelectedFiles(prev => { const next = new Set(prev); next.delete(name); return next; });
+      fetchFiles();
+    } catch (err) {
+      toast.error('Failed to delete log file');
+    }
+  };
+
+  const handleBatchDelete = async () => {
+    if (selectedFiles.size === 0) return;
+    try {
+      await Promise.all(Array.from(selectedFiles).map(name =>
+        fetch(`/api/servers/${serverId}/files?path=${encodeURIComponent('logs/' + name)}`, { method: 'DELETE' })
+      ));
+      toast.success(`${selectedFiles.size} log file${selectedFiles.size > 1 ? 's' : ''} deleted`);
+      setSelectedFiles(new Set());
+      setBatchDeleteConfirm(false);
+      fetchFiles();
+    } catch (err) {
+      toast.error('Failed to delete selected logs');
+    }
+  };
+
+  return (
+    <>
+      {selectedFiles.size > 0 && (
+        <div className="flex items-center gap-3 mb-4">
+          <button
+            onClick={() => setBatchDeleteConfirm(true)}
+            className="flex items-center gap-2 px-4 py-2 rounded font-bold border border-red-500 text-red-400 hover:bg-red-900/20 transition-colors"
+          >
+            <Trash2 size={18} />
+            Delete Selected ({selectedFiles.size})
+          </button>
+        </div>
+      )}
+
+      <div className="mt-6 bg-[#202020] border border-[#3a3a3a] rounded-lg overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left min-w-[720px]">
+          <thead className="bg-[#252524] text-gray-400 border-b border-[#3a3a3a]">
+            <tr>
+              <th className="px-4 py-4 w-12">
+                {files.length > 0 && (
+                  <span
+                    onClick={() => setSelectedFiles(prev => prev.size === files.length ? new Set() : new Set(files.map(f => f.name)))}
+                    className={clsx('flex-shrink-0 cursor-pointer', selectedFiles.size === files.length ? 'text-[#E5B80B]' : 'text-gray-600')}
+                  >
+                    {selectedFiles.size === files.length ? <Check size={16} /> : <Square size={16} />}
+                  </span>
+                )}
+              </th>
+              <th className="px-4 py-4 font-medium">Date</th>
+              <th className="px-4 py-4 font-medium">File</th>
+              <th className="px-4 py-4 font-medium">Size</th>
+              <th className="px-4 py-4 font-medium text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[#3a3a3a]">
+            {loadingFiles ? (
+              <tr><td colSpan={5} className="px-6 py-8 text-center text-gray-500">Loading...</td></tr>
+            ) : files.length === 0 ? (
+              <tr><td colSpan={5} className="px-6 py-8 text-center text-gray-500">No log files found.</td></tr>
+            ) : files.map(file => (
+              <tr key={file.name} onClick={() => handleToggleFile(file.name)} className="transition-colors group cursor-pointer hover:bg-[#252524]">
+                <td className="px-4 py-4 w-12">
+                  <span className={clsx('flex-shrink-0 cursor-pointer', selectedFiles.has(file.name) ? 'text-[#E5B80B]' : 'text-gray-600')}>
+                    {selectedFiles.has(file.name) ? <Check size={16} /> : <Square size={16} />}
+                  </span>
+                </td>
+                <td className="px-4 py-4 font-medium text-white">{file.modTime}</td>
+                <td className="px-4 py-4 text-gray-400 font-mono text-sm">{file.name}</td>
+                <td className="px-4 py-4 text-gray-400 text-sm">{file.size}</td>
+                <td className="px-4 py-4 text-right">
+                  <div className="flex items-center justify-end gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
+                    <button onClick={(e) => { e.stopPropagation(); openFile(file.name); }} className="p-2 hover:bg-[#333] text-gray-300 rounded" title="Open">
+                      <FileText size={18} />
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); downloadFile(file.name); }} className="p-2 hover:bg-[#333] text-gray-300 rounded" title="Download">
+                      <Download size={18} />
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); deleteFile(file.name); }} className="p-2 hover:bg-red-900/20 text-red-400 rounded" title="Delete">
+                      <Trash2 size={18} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Viewer modal */}
+      <AnimatePresence>
+        {viewer.name && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="w-full max-w-4xl bg-[#0f0f0f] border border-[#404040] rounded-lg shadow-2xl p-4 overflow-auto max-h-[80vh]">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-lg font-bold">{viewer.name}</h3>
+                <div className="flex gap-2">
+                  <button
+                    onClick={async () => {
+                      try {
+                        await copyToClipboard(viewer.content || '');
+                        toast.info('Log copied to clipboard.');
+                      } catch {
+                        toast.error('Failed to copy log');
+                      }
+                    }}
+                    className="px-3 py-1 bg-[#333] rounded text-sm"
+                  >
+                    Copy
+                  </button>
+                  <button onClick={() => setViewer({ name: null, content: null })} className="px-3 py-1 bg-[#E5B80B] rounded text-sm text-black">Close</button>
+                </div>
+              </div>
+              <pre className="text-xs font-mono text-gray-200 whitespace-pre-wrap">{viewer.content}</pre>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Batch Delete Confirmation Modal for Stored Logs */}
+      <AnimatePresence>
+        {batchDeleteConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setBatchDeleteConfirm(false)}>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-md bg-[#252524] border border-red-900/50 rounded-lg shadow-2xl p-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3 text-red-500 mb-4">
+                <AlertTriangle size={24} />
+                <h3 className="text-xl font-bold">Delete {selectedFiles.size} Log File{selectedFiles.size > 1 ? 's' : ''}?</h3>
+              </div>
+              <p className="text-gray-300 mb-6">
+                Are you sure you want to delete {selectedFiles.size} selected log file{selectedFiles.size > 1 ? 's' : ''}? This action cannot be undone.
+              </p>
+              <div className="flex justify-end gap-3">
+                <button onClick={() => setBatchDeleteConfirm(false)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
+                <button onClick={handleBatchDelete} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Delete</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+    </div>
+    </>
+  );
+}
+
 const LiveLogs = () => {
   const { activeServer } = useServer();
+
+  // When server is not running, show stored logs (one-click select, double-click open)
+  if (!activeServer) return <div className="flex-1 p-4 text-gray-500">No server selected</div>;
+  if (activeServer.status !== 'Running' && activeServer.status !== 'Booting') {
+    return <div className="p-4 md:p-8"><StoredLogs serverId={activeServer.id} /></div>;
+  }
+
   const [filterLevel, setFilterLevel] = useState<string | null>(null);
   const [isPaused, setIsPaused] = useState(false);
   const [search, setSearch] = useState('');
@@ -206,7 +475,7 @@ const LiveLogs = () => {
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-1 bg-[#121212]">
          {filteredLogs.length === 0 && (
            <div className="text-gray-500 text-center py-8">
-             {connected ? 'Waiting for log entries...' : 'Connect to a running server to see live logs'}
+             {connected ? 'Waiting for log entries...' : 'No live logs — switch to stored logs below'}
            </div>
          )}
          {filteredLogs.map((log) => (
@@ -219,6 +488,11 @@ const LiveLogs = () => {
              <span className="text-gray-300 break-all">{log.msg}</span>
            </div>
          ))}
+
+         {/* When not connected, show stored log files so user can inspect logs while server is off */}
+         {!connected && activeServer && (
+           <StoredLogs serverId={activeServer.id} />
+         )}
       </div>
     </div>
   );
@@ -229,6 +503,13 @@ interface CrashReport {
   date: string;
   size: string;
   cause: string;
+}
+
+interface ServerFile {
+  name: string;
+  type: string;
+  size: string;
+  modTime: string;
 }
 
 const CrashReports = () => {
@@ -251,6 +532,7 @@ const CrashReports = () => {
       setLoading(false);
     }
   }, [activeServer?.id]);
+
 
   useEffect(() => {
     fetchReports();
@@ -315,6 +597,20 @@ const CrashReports = () => {
     }
   };
 
+  const [reportViewer, setReportViewer] = useState<{ name: string | null; content: string | null }>({ name: null, content: null });
+
+  const handleOpenReport = async (reportName: string) => {
+    if (!activeServer) return;
+    try {
+      const res = await fetch(`/api/servers/${activeServer.id}/crash-reports/${encodeURIComponent(reportName)}`);
+      if (!res.ok) throw new Error('Failed to open');
+      const text = await res.text();
+      setReportViewer({ name: reportName, content: text });
+    } catch {
+      toast.error('Failed to open crash report');
+    }
+  };
+
   const handleDelete = async (reportName: string) => {
     if (!activeServer) return;
     try {
@@ -347,39 +643,40 @@ const CrashReports = () => {
   };
 
   return (
-    <div className="p-4 md:p-8">
-      {selectedReports.size > 0 && (
-        <div className="flex items-center gap-3 mb-4">
-          <button
-            onClick={() => setBatchDeleteConfirm(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded font-bold border border-red-500 text-red-400 hover:bg-red-900/20 transition-colors"
-          >
-            <Trash2 size={18} />
-            Delete Selected ({selectedReports.size})
-          </button>
-        </div>
-      )}
-      <div className="bg-[#202020] border border-[#3a3a3a] rounded-lg overflow-hidden">
-        <div className="overflow-x-auto">
-        <table className="w-full text-left min-w-[720px]">
-          <thead className="bg-[#252524] text-gray-400 border-b border-[#3a3a3a]">
-             <tr>
-               <th className="px-4 py-4 w-12">
-                 {reports.length > 0 && (
-                   <span
-                     onClick={handleToggleSelectAll}
-                     className={clsx('flex-shrink-0 cursor-pointer', selectedReports.size === reports.length ? 'text-[#E5B80B]' : 'text-gray-600')}
-                   >
-                     {selectedReports.size === reports.length ? <Check size={16} /> : <Square size={16} />}
-                   </span>
-                 )}
-               </th>
-               <th className="px-4 py-4 font-medium">Date</th>
-               <th className="px-4 py-4 font-medium">File</th>
-               <th className="px-4 py-4 font-medium">Likely Cause</th>
-               <th className="px-4 py-4 font-medium text-right">Actions</th>
-             </tr>
-          </thead>
+    <div className="flex flex-col h-full">
+      <div className="flex-1 overflow-auto p-4 md:p-8">
+        {selectedReports.size > 0 && (
+          <div className="flex items-center gap-3 mb-4">
+            <button
+              onClick={() => setBatchDeleteConfirm(true)}
+              className="flex items-center gap-2 px-4 py-2 rounded font-bold border border-red-500 text-red-400 hover:bg-red-900/20 transition-colors"
+            >
+              <Trash2 size={18} />
+              Delete Selected ({selectedReports.size})
+            </button>
+          </div>
+        )}
+        <div className="bg-[#202020] border border-[#3a3a3a] rounded-lg overflow-hidden">
+          <div className="overflow-x-auto">
+          <table className="w-full text-left min-w-[720px]">
+            <thead className="bg-[#252524] text-gray-400 border-b border-[#3a3a3a]">
+               <tr>
+                 <th className="px-4 py-4 w-12">
+                   {reports.length > 0 && (
+                     <span
+                       onClick={handleToggleSelectAll}
+                       className={clsx('flex-shrink-0 cursor-pointer', selectedReports.size === reports.length ? 'text-[#E5B80B]' : 'text-gray-600')}
+                     >
+                       {selectedReports.size === reports.length ? <Check size={16} /> : <Square size={16} />}
+                     </span>
+                   )}
+                 </th>
+                 <th className="px-4 py-4 font-medium">Date</th>
+                 <th className="px-4 py-4 font-medium">File</th>
+                 <th className="px-4 py-4 font-medium">Likely Cause</th>
+                 <th className="px-4 py-4 font-medium text-right">Actions</th>
+               </tr>
+            </thead>
           <tbody className="divide-y divide-[#3a3a3a]">
              {loading ? (
                <tr><td colSpan={5} className="px-6 py-8 text-center text-gray-500">Loading...</td></tr>
@@ -411,6 +708,9 @@ const CrashReports = () => {
                  <td className="px-4 py-4 text-red-300">{report.cause || 'Unknown'}</td>
                  <td className="px-4 py-4 text-right">
                    <div className="flex items-center justify-end gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
+                      <button onClick={(e) => { e.stopPropagation(); handleOpenReport(report.name); }} className="p-2 hover:bg-[#333] text-gray-300 rounded" title="Open">
+                        <FileText size={18} />
+                      </button>
                       <button onClick={(e) => { e.stopPropagation(); handleCopy(report.name); }} className="p-2 hover:bg-[#333] text-gray-300 rounded" title="Copy">
                         <Copy size={18} />
                       </button>
@@ -455,6 +755,37 @@ const CrashReports = () => {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Crash report viewer (double-click to open) */}
+      <AnimatePresence>
+        {reportViewer.name && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="w-full max-w-4xl bg-[#0f0f0f] border border-[#404040] rounded-lg shadow-2xl p-4 overflow-auto max-h-[80vh]">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-lg font-bold">{reportViewer.name}</h3>
+                <div className="flex gap-2">
+                  <button
+                    onClick={async () => {
+                      try {
+                        await copyToClipboard(reportViewer.content || '');
+                        toast.info('Log copied to clipboard.');
+                      } catch {
+                        toast.error('Failed to copy log');
+                      }
+                    }}
+                    className="px-3 py-1 bg-[#333] rounded text-sm"
+                  >
+                    Copy
+                  </button>
+                  <button onClick={() => setReportViewer({ name: null, content: null })} className="px-3 py-1 bg-[#E5B80B] rounded text-sm text-black">Close</button>
+                </div>
+              </div>
+              <pre className="text-xs font-mono text-gray-200 whitespace-pre-wrap">{reportViewer.content}</pre>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
+  </div>
   );
 };
