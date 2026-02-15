@@ -49,7 +49,7 @@ export const LogsPage = () => {
   const [activeTab, setActiveTab] = useState<LogTab>('live');
 
   return (
-    <div className="flex flex-col h-full bg-[#1e1e1d]">
+    <div className="flex-1 flex flex-col min-h-0 bg-[#1e1e1d]">
       <div className="bg-[#252524] border-b border-[#3a3a3a] px-4 md:px-6 py-4 flex flex-col md:flex-row md:justify-between md:items-center gap-3">
         <h2 className="text-xl font-bold text-white">Logs</h2>
         <div className="flex bg-[#1a1a1a] rounded p-1 border border-[#333]">
@@ -68,7 +68,7 @@ export const LogsPage = () => {
         </div>
       </div>
 
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-hidden min-h-0">
         {activeTab === 'live' ? <LiveLogs /> : <CrashReports />}
       </div>
     </div>
@@ -192,7 +192,7 @@ const StoredLogs = ({ serverId }: { serverId: string }) => {
         </div>
       )}
 
-      <div className="mt-6 bg-[#202020] border border-[#3a3a3a] rounded-lg overflow-hidden">
+      <div className="mt-6 bg-[#202020] border border-[#3a3a3a] rounded-lg overflow-auto max-h-[calc(100vh-220px)] scrollbar-thin scrollbar-thumb-gray-700">
         <div className="overflow-x-auto">
           <table className="w-full text-left min-w-[720px]">
           <thead className="bg-[#252524] text-gray-400 border-b border-[#3a3a3a]">
@@ -314,7 +314,7 @@ const LiveLogs = () => {
   // When server is not running, show stored logs (one-click select, double-click open)
   if (!activeServer) return <div className="flex-1 p-4 text-gray-500">No server selected</div>;
   if (activeServer.status !== 'Running' && activeServer.status !== 'Booting') {
-    return <div className="p-4 md:p-8"><StoredLogs serverId={activeServer.id} /></div>;
+    return <div className="flex-1 overflow-y-auto p-4 md:p-8 min-h-0"><StoredLogs serverId={activeServer.id} /></div>;
   }
 
   const [filterLevel, setFilterLevel] = useState<string | null>(null);
@@ -421,7 +421,7 @@ const LiveLogs = () => {
   );
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex-1 flex flex-col min-h-0">
       <div className="p-4 border-b border-[#3a3a3a] flex flex-wrap gap-4 items-center bg-[#202020]">
          <div className="relative flex-1 max-w-md">
            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
@@ -643,7 +643,7 @@ const CrashReports = () => {
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex-1 flex flex-col min-h-0">
       <div className="flex-1 overflow-auto p-4 md:p-8">
         {selectedReports.size > 0 && (
           <div className="flex items-center gap-3 mb-4">
@@ -656,7 +656,7 @@ const CrashReports = () => {
             </button>
           </div>
         )}
-        <div className="bg-[#202020] border border-[#3a3a3a] rounded-lg overflow-hidden">
+        <div className="bg-[#202020] border border-[#3a3a3a] rounded-lg overflow-auto max-h-[calc(100vh-220px)] scrollbar-thin scrollbar-thumb-gray-700">
           <div className="overflow-x-auto">
           <table className="w-full text-left min-w-[720px]">
             <thead className="bg-[#252524] text-gray-400 border-b border-[#3a3a3a]">
