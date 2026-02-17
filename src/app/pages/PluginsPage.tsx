@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useServer, Plugin } from '../context/ServerContext';
-import { Upload, Trash2, RefreshCw, AlertTriangle, CheckCircle, XCircle, Loader2, ArrowDownCircle, Cloud, Check, Square } from 'lucide-react';
+import { Upload, Trash2, RefreshCw, AlertTriangle, AlertCircle, CheckCircle, XCircle, Loader2, ArrowDownCircle, Cloud, Check, Square, Save, Pencil } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../components/ui/tooltip';
@@ -11,6 +11,13 @@ interface PluginWithUpdate extends Plugin {
   latestVersion?: string;
   versionStatus?: 'latest' | 'outdated' | 'incompatible' | 'unknown';
   updateUrl?: string;
+}
+
+interface StickyUpdateInfo {
+  latestVersion?: string;
+  versionStatus?: 'latest' | 'outdated' | 'incompatible' | 'unknown';
+  updateUrl?: string;
+  checkedVersion?: string;
 }
 
 export const PluginsPage = () => {
@@ -31,8 +38,13 @@ export const PluginsPage = () => {
   const [pendingUpdate, setPendingUpdate] = useState<PluginWithUpdate | null>(null);
   const [selectedPlugins, setSelectedPlugins] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [stickyUpdates, setStickyUpdates] = useState<Record<string, Partial<PluginWithUpdate>>>({});
+  const [stickyUpdates, setStickyUpdates] = useState<Record<string, StickyUpdateInfo>>({});
   const [batchDeleteConfirmPlugins, setBatchDeleteConfirmPlugins] = useState(false);
+  const [sourceDrafts, setSourceDrafts] = useState<Record<string, string>>({});
+  const [sourceConfirmOpen, setSourceConfirmOpen] = useState(false);
+  const [pendingSource, setPendingSource] = useState<{ fileName: string; url: string } | null>(null);
+  const [savingSourceFor, setSavingSourceFor] = useState<string | null>(null);
+  const [editingSources, setEditingSources] = useState<Set<string>>(new Set());
 
   const isServerOff = activeServer?.status === 'Stopped' || activeServer?.status === 'Crashed' || activeServer?.status === 'Error';
 
@@ -49,7 +61,15 @@ export const PluginsPage = () => {
       if (!res.ok) throw new Error('Failed to fetch plugins');
       const data: PluginWithUpdate[] = await res.json();
       // Merge sticky update info so "download update" buttons remain visible until user leaves
-      const merged = (data || []).map(p => ({ ...p, ...(stickyUpdates[p.fileName] || {}) }));
+      const merged = (data || []).map(p => {
+        const sticky = stickyUpdates[p.fileName];
+        if (!sticky) return p;
+        // Apply sticky info only if plugin version is unchanged since the check.
+        if (sticky.checkedVersion && sticky.checkedVersion === p.version) {
+          return { ...p, ...sticky };
+        }
+        return p;
+      });
       setPlugins(merged);
     } catch (err) {
       console.error('Failed to fetch plugins:', err);
@@ -67,12 +87,17 @@ export const PluginsPage = () => {
     setLastCheckedAt(null);
     setSelectedPlugins(new Set());
     setStickyUpdates({});
+    setSourceDrafts({});
+    setSourceConfirmOpen(false);
+    setPendingSource(null);
+    setEditingSources(new Set());
   }, [activeServerId]);
 
   useEscapeKey(isUploadModalOpen, () => setIsUploadModalOpen(false));
   useEscapeKey(!!deleteTarget, () => setDeleteTarget(null));
   useEscapeKey(restartPromptOpen, () => { setRestartPromptOpen(false); setPendingUpdate(null); });
   useEscapeKey(updateAllPromptOpen, () => setUpdateAllPromptOpen(false));
+  useEscapeKey(sourceConfirmOpen, () => { setSourceConfirmOpen(false); setPendingSource(null); });
 
   const fetchUpdateResults = useCallback(async () => {
     if (!activeServerId) return [];
@@ -94,13 +119,18 @@ export const PluginsPage = () => {
       return plugin;
     }));
 
-    const sticky: Record<string, Partial<PluginWithUpdate>> = {};
+    const sticky: Record<string, StickyUpdateInfo> = {};
     (results as PluginWithUpdate[]).forEach(r => {
       if (r.versionStatus === 'outdated' && r.updateUrl) {
-        sticky[r.fileName] = { latestVersion: r.latestVersion, versionStatus: r.versionStatus, updateUrl: r.updateUrl };
+        sticky[r.fileName] = {
+          latestVersion: r.latestVersion,
+          versionStatus: r.versionStatus,
+          updateUrl: r.updateUrl,
+          checkedVersion: r.version,
+        };
       }
     });
-    setStickyUpdates(prev => ({ ...prev, ...sticky }));
+    setStickyUpdates(sticky);
 
     setUpdatesChecked(true);
     setLastCheckedAt(new Date());
@@ -231,14 +261,15 @@ export const PluginsPage = () => {
         throw new Error(data.error || 'Failed to update plugin');
       }
       await res.json().catch(() => ({}));
+      setStickyUpdates(prev => {
+        const next = { ...prev };
+        delete next[plugin.fileName];
+        return next;
+      });
       notifyUpdateComplete();
       fetchPlugins();
     } catch (err) {
-      if (isServerOff) {
-        toast.error('Update failed!');
-      } else {
-        toast.error(err instanceof Error ? err.message : 'Failed to update plugin');
-      }
+      toast.error(err instanceof Error ? err.message : 'Failed to update plugin');
     } finally {
       setUpdatingPlugin(null);
       setPendingUpdate(null);
@@ -324,17 +355,18 @@ export const PluginsPage = () => {
             throw new Error(data.error || 'Failed to update plugin');
           }
           updatedCount += 1;
+          setStickyUpdates(prev => {
+            const next = { ...prev };
+            delete next[plugin.fileName];
+            return next;
+          });
         } catch (err) {
           failed.push(plugin.name || plugin.fileName);
         }
       }
 
       if (failed.length > 0) {
-        if (isServerOff) {
-          toast.error('Update failed!');
-        } else {
-          toast.error(`Failed to update: ${failed.join(', ')}`);
-        }
+        toast.error(`Failed to update: ${failed.join(', ')}`);
       }
       if (updatedCount > 0 && failed.length === 0) {
         notifyUpdateComplete();
@@ -343,11 +375,7 @@ export const PluginsPage = () => {
       setSelectedPlugins(new Set());
       fetchPlugins();
     } catch (err) {
-      if (isServerOff) {
-        toast.error('Update failed!');
-      } else {
-        toast.error(err instanceof Error ? err.message : `Failed to update ${itemLabelPlural}`);
-      }
+      toast.error(err instanceof Error ? err.message : `Failed to update ${itemLabelPlural}`);
     } finally {
       setUpdatingAll(false);
     }
@@ -423,12 +451,17 @@ export const PluginsPage = () => {
           });
           if (!res.ok) throw new Error('Failed');
           updatedCount += 1;
+          setStickyUpdates(prev => {
+            const next = { ...prev };
+            delete next[plugin.fileName];
+            return next;
+          });
         } catch {
           failed.push(plugin.name || plugin.fileName);
         }
       }
       if (failed.length > 0) {
-        toast.error(isServerOff ? 'Update failed!' : `Failed to update: ${failed.join(', ')}`);
+        toast.error(`Failed to update: ${failed.join(', ')}`);
       }
       if (updatedCount > 0 && failed.length === 0) {
         notifyUpdateComplete();
@@ -436,10 +469,69 @@ export const PluginsPage = () => {
       setSelectedPlugins(new Set());
       fetchPlugins();
     } catch (err) {
-      toast.error(isServerOff ? 'Update failed!' : (err instanceof Error ? err.message : `Failed to update ${itemLabelPlural}`));
+      toast.error(err instanceof Error ? err.message : `Failed to update ${itemLabelPlural}`);
     } finally {
       setUpdatingAll(false);
     }
+  };
+
+  const openSourceConfirmation = (plugin: PluginWithUpdate) => {
+    const url = (sourceDrafts[plugin.fileName] ?? plugin.sourceUrl ?? '').trim();
+    if (!url) {
+      toast.error('Source link is required');
+      return;
+    }
+    setPendingSource({ fileName: plugin.fileName, url });
+    setSourceConfirmOpen(true);
+  };
+
+  const confirmSaveSource = async () => {
+    if (!activeServer || !pendingSource) {
+      setSourceConfirmOpen(false);
+      setPendingSource(null);
+      return;
+    }
+
+    setSavingSourceFor(pendingSource.fileName);
+    try {
+      const res = await fetch(`/api/servers/${activeServer.id}/plugins/${encodeURIComponent(pendingSource.fileName)}/source`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: pendingSource.url }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to save source link');
+      }
+
+      toast.success('Source link saved');
+      setSourceDrafts(prev => {
+        const next = { ...prev };
+        delete next[pendingSource.fileName];
+        return next;
+      });
+      setEditingSources(prev => {
+        const next = new Set(prev);
+        next.delete(pendingSource.fileName);
+        return next;
+      });
+      setSourceConfirmOpen(false);
+      setPendingSource(null);
+      fetchPlugins();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save source link');
+    } finally {
+      setSavingSourceFor(null);
+    }
+  };
+
+  const startEditingSource = (plugin: PluginWithUpdate) => {
+    setSourceDrafts(prev => ({ ...prev, [plugin.fileName]: prev[plugin.fileName] ?? plugin.sourceUrl ?? '' }));
+    setEditingSources(prev => {
+      const next = new Set(prev);
+      next.add(plugin.fileName);
+      return next;
+    });
   };
 
   const renderVersionBadge = (plugin: PluginWithUpdate) => {
@@ -454,6 +546,8 @@ export const PluginsPage = () => {
         ? { text: 'Outdated!', color: 'text-yellow-400' }
         : status === 'incompatible'
           ? { text: 'Incompatible', color: 'text-red-400' }
+          : status === 'unknown'
+            ? { text: 'Unknown', color: 'text-sky-400' }
           : null;
 
     return (
@@ -578,6 +672,7 @@ export const PluginsPage = () => {
                   <th className="px-4 py-4 font-medium">Name</th>
                   <th className="px-4 py-4 font-medium">File</th>
                   <th className="px-4 py-4 font-medium">Version</th>
+                  <th className="px-4 py-4 font-medium">Source</th>
                   <th className="px-4 py-4 font-medium">Size</th>
                   <th className="px-4 py-4 font-medium">State</th>
                   <th className="px-4 py-4 font-medium text-right">Actions</th>
@@ -603,6 +698,48 @@ export const PluginsPage = () => {
                     <td className="px-4 py-4 font-medium text-white">{plugin.name}</td>
                     <td className="px-4 py-4 text-gray-400 font-mono text-sm">{plugin.fileName}</td>
                     <td className="px-4 py-4">{renderVersionBadge(plugin)}</td>
+                    <td className="px-4 py-4">
+                      {(plugin.sourceUrl && !editingSources.has(plugin.fileName)) ? (
+                        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                          <span className="text-xs text-gray-300">Source added.</span>
+                          <Check size={14} className="text-[#E5B80B]" />
+                          <button
+                            onClick={() => startEditingSource(plugin)}
+                            className="p-1.5 rounded border border-[#404040] text-gray-300 hover:bg-[#333]"
+                            title="Edit source link"
+                          >
+                            <Pencil size={14} />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 min-w-[260px]" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="text"
+                            value={sourceDrafts[plugin.fileName] ?? plugin.sourceUrl ?? ''}
+                            onChange={(e) => setSourceDrafts(prev => ({ ...prev, [plugin.fileName]: e.target.value }))}
+                            placeholder={isModded ? 'Insert permanent link here' : 'Insert plugin link here'}
+                            className="w-full bg-[#1a1a1a] border border-[#333] rounded px-2 py-1.5 text-xs text-gray-300 focus:outline-none focus:border-[#E5B80B]"
+                          />
+                          <button
+                            onClick={() => openSourceConfirmation(plugin)}
+                            disabled={savingSourceFor === plugin.fileName}
+                            className="p-1.5 rounded border border-[#404040] text-gray-300 hover:bg-[#333] disabled:opacity-50"
+                            title="Save source link"
+                          >
+                            {savingSourceFor === plugin.fileName ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                          </button>
+                          {plugin.sourceUrl && (
+                            <button
+                              onClick={() => startEditingSource(plugin)}
+                              className="p-1.5 rounded border border-[#404040] text-gray-300 hover:bg-[#333]"
+                              title="Edit source link"
+                            >
+                              <Pencil size={14} />
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-4 py-4 text-gray-400 text-sm">{plugin.size}</td>
                     <td className="px-4 py-4">
                       {plugin.versionStatus === 'incompatible' ? (
@@ -612,6 +749,10 @@ export const PluginsPage = () => {
                       ) : plugin.versionStatus === 'outdated' ? (
                         <span className="flex items-center gap-1.5 text-yellow-400 text-sm">
                           <AlertTriangle size={14} /> Outdated!
+                        </span>
+                      ) : plugin.versionStatus === 'unknown' ? (
+                        <span className="flex items-center gap-1.5 text-sky-400 text-sm">
+                          <AlertCircle size={14} /> Unknown
                         </span>
                       ) : plugin.enabled ? (
                         <span className="flex items-center gap-1.5 text-green-400 text-sm">
@@ -768,6 +909,41 @@ export const PluginsPage = () => {
               <div className="flex justify-end gap-3">
                 <button onClick={() => setBatchDeleteConfirmPlugins(false)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
                 <button onClick={() => { setBatchDeleteConfirmPlugins(false); handleDeleteSelected(); }} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Delete</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Source Link Confirmation */}
+      <AnimatePresence>
+        {sourceConfirmOpen && pendingSource && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-md bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6"
+            >
+              <h3 className="text-xl font-bold text-white mb-3">Confirm source link</h3>
+              <p className="text-gray-300">Are you sure this is the correct link?</p>
+              <p className="text-xs text-gray-500 mb-3">This can be changed later.</p>
+              <p className="text-xs text-[#E5B80B] break-all mb-6">{pendingSource.url}</p>
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => { setSourceConfirmOpen(false); setPendingSource(null); }}
+                  className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
+                  disabled={savingSourceFor !== null}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmSaveSource}
+                  className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold"
+                  disabled={savingSourceFor !== null}
+                >
+                  Accept
+                </button>
               </div>
             </motion.div>
           </div>

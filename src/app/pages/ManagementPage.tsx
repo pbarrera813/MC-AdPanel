@@ -291,6 +291,7 @@ export const ManagementPage = () => {
                 {/* TPS Display */}
                 {(() => {
                   const showFabricTpsHint = activeServer.type === 'Fabric' && !activeServer.fabricTpsAvailable;
+                  const showVanillaTpsHint = activeServer.type === 'Vanilla';
                   const showValue = activeServer.status === 'Running' && activeServer.tps > 0 && !showFabricTpsHint;
                   const tpsCard = (
                     <div className="bg-[#202020] rounded-lg border border-[#333] p-4">
@@ -323,7 +324,7 @@ export const ManagementPage = () => {
                     </div>
                   );
 
-                  if (!showFabricTpsHint) {
+                  if (!showFabricTpsHint && !showVanillaTpsHint) {
                     return tpsCard;
                   }
 
@@ -333,7 +334,7 @@ export const ManagementPage = () => {
                         {tpsCard}
                       </TooltipTrigger>
                       <TooltipContent className="bg-[#252524] border border-[#3a3a3a] px-3 py-1.5 text-gray-300">
-                        To get TPS install Fabric-TPS mod.
+                        {showVanillaTpsHint ? 'Not supported on this server type' : 'To get TPS install Fabric-TPS mod.'}
                       </TooltipContent>
                     </Tooltip>
                   );

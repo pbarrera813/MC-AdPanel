@@ -11,13 +11,26 @@ interface ServersPageProps {
 }
 
 const SERVER_TYPES = [
-  'Spigot', 'Paper', 'Folia', 'Purpur', 'Velocity', 'Waterfall', 'Forge', 'Fabric', 'NeoForge'
+  'Vanilla', 'Spigot', 'Paper', 'Folia', 'Purpur', 'Velocity', 'Waterfall', 'Forge', 'Fabric', 'NeoForge'
 ] as const;
 
 interface VersionInfo {
   version: string;
   latest: boolean;
 }
+
+const compareVersionStrings = (a: string, b: string) => {
+  const parse = (v: string) => v.split(/[^\d]+/).filter(Boolean).map(n => Number.parseInt(n, 10) || 0);
+  const ap = parse(a);
+  const bp = parse(b);
+  const maxLen = Math.max(ap.length, bp.length);
+  for (let i = 0; i < maxLen; i += 1) {
+    const av = ap[i] ?? 0;
+    const bv = bp[i] ?? 0;
+    if (av !== bv) return av > bv ? 1 : -1;
+  }
+  return 0;
+};
 
 export const ServersPage = ({ onViewChange }: ServersPageProps) => {
   const { servers, setActiveServerId, startServer, stopServer, addServer, refreshServers, loading } = useServer();
@@ -36,6 +49,9 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
   });
   const [versions, setVersions] = useState<VersionInfo[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
+  const [typeVersionCatalog, setTypeVersionCatalog] = useState<Record<string, VersionInfo[]>>({});
+  const [updatePopup, setUpdatePopup] = useState<{ serverId: string; serverName: string; currentVersion: string; selectedVersion: string; options: VersionInfo[] } | null>(null);
+  const [updatingVersion, setUpdatingVersion] = useState(false);
 
   // Load system defaults for create form
   useEffect(() => {
@@ -82,6 +98,41 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
       })
       .finally(() => setVersionsLoading(false));
   }, [formData.type]);
+
+  useEffect(() => {
+    const serverTypes = Array.from(new Set(servers.map(s => s.type)));
+    serverTypes.forEach((serverType) => {
+      if (typeVersionCatalog[serverType]) return;
+      fetch(`/api/versions/${serverType}`)
+        .then(res => {
+          if (!res.ok) throw new Error('Failed to fetch versions');
+          return res.json();
+        })
+        .then((data: VersionInfo[]) => {
+          setTypeVersionCatalog(prev => ({ ...prev, [serverType]: data }));
+        })
+        .catch(() => {
+          setTypeVersionCatalog(prev => ({ ...prev, [serverType]: [] }));
+        });
+    });
+  }, [servers, typeVersionCatalog]);
+
+  const latestVersionForServerType = (serverType: string) => {
+    const list = typeVersionCatalog[serverType];
+    if (!list || list.length === 0) return '';
+    return list.find(v => v.latest)?.version || list[0].version;
+  };
+
+  const serverHasNewerVersion = (server: typeof servers[number]) => {
+    const latest = latestVersionForServerType(server.type);
+    if (!latest) return false;
+    return compareVersionStrings(latest, server.version) > 0;
+  };
+
+  const versionsAboveCurrent = (server: typeof servers[number]) => {
+    const list = typeVersionCatalog[server.type] || [];
+    return list.filter(v => compareVersionStrings(v.version, server.version) > 0);
+  };
 
   const handleSelectServer = (id: string) => {
     // If rename handler consumed this click, skip toggling
@@ -242,6 +293,65 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
     }
   };
 
+  const handleOpenVersionPopup = async (e: React.MouseEvent, server: typeof servers[number]) => {
+    e.stopPropagation();
+
+    if (server.status === 'Running') {
+      toast.error("Can't update while server is running.");
+      return;
+    }
+
+    let list = typeVersionCatalog[server.type];
+    if (!list) {
+      try {
+        const res = await fetch(`/api/versions/${server.type}`);
+        if (!res.ok) throw new Error('Failed to fetch versions');
+        list = await res.json();
+        setTypeVersionCatalog(prev => ({ ...prev, [server.type]: list || [] }));
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Failed to load versions');
+        return;
+      }
+    }
+
+    const options = (list || []).filter(v => compareVersionStrings(v.version, server.version) > 0);
+    if (options.length === 0) {
+      toast.info('Server is already on the latest version.');
+      return;
+    }
+
+    setUpdatePopup({
+      serverId: server.id,
+      serverName: server.name,
+      currentVersion: server.version,
+      selectedVersion: options[0].version,
+      options,
+    });
+  };
+
+  const handleApplyVersionUpdate = async () => {
+    if (!updatePopup) return;
+    setUpdatingVersion(true);
+    try {
+      const res = await fetch(`/api/servers/${updatePopup.serverId}/version`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ version: updatePopup.selectedVersion }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to update server version');
+      }
+      toast.info(`Updating to ${updatePopup.selectedVersion}...`);
+      setUpdatePopup(null);
+      await refreshServers();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update server version');
+    } finally {
+      setUpdatingVersion(false);
+    }
+  };
+
   const handleToggleAutoStart = async (e: React.MouseEvent, serverId: string, currentValue: boolean) => {
     e.stopPropagation();
     try {
@@ -260,6 +370,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
 
   useEscapeKey(deleteConfirm, () => setDeleteConfirm(false));
   useEscapeKey(!!flagsPopup, () => setFlagsPopup(null));
+  useEscapeKey(!!updatePopup, () => setUpdatePopup(null));
 
   if (isCreating) {
     return (
@@ -657,6 +768,16 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
                      <Settings2 size={12} />
                      <span>JVM Flags</span>
                    </button>
+                   {serverHasNewerVersion(server) && (
+                     <button
+                      onClick={(e) => handleOpenVersionPopup(e, server)}
+                      className="flex items-center gap-1 text-[10px] font-medium text-gray-500 hover:text-[#E5B80B] transition-colors"
+                      title="Update server version"
+                     >
+                       <RotateCw size={12} />
+                       <span>Update version</span>
+                     </button>
+                   )}
                  </div>
 
                  <button
@@ -760,6 +881,60 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
                       className="text-xs px-3 py-1.5 rounded font-medium bg-[#E5B80B] text-black hover:bg-[#d4a90a] transition-colors"
                     >
                       Apply
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Version Update Popup */}
+              {updatePopup?.serverId === server.id && (
+                <div
+                  className="absolute inset-0 z-10 bg-[#202020]/95 backdrop-blur-sm rounded-lg p-5 flex flex-col"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex items-center justify-between mb-4">
+                    <h4 className="text-sm font-bold text-white">Update version</h4>
+                    <button onClick={() => setUpdatePopup(null)} className="text-gray-500 hover:text-white transition-colors">
+                      <X size={16} />
+                    </button>
+                  </div>
+
+                  <div className="text-xs text-gray-400 mb-3">
+                    <div>Current version: <span className="text-white">{updatePopup.currentVersion}</span></div>
+                    <div className="mt-1">Choose a newer version for <span className="text-white">{updatePopup.serverName}</span>.</div>
+                  </div>
+
+                  <label className="block text-xs text-gray-500 mb-2">Available versions</label>
+                  <div className="relative">
+                    <select
+                      value={updatePopup.selectedVersion}
+                      onChange={(e) => setUpdatePopup({ ...updatePopup, selectedVersion: e.target.value })}
+                      className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white appearance-none cursor-pointer focus:outline-none focus:border-[#E5B80B]"
+                      disabled={updatingVersion}
+                    >
+                      {updatePopup.options.map((v) => (
+                        <option key={v.version} value={v.version}>
+                          {v.version}{v.latest ? ' (Latest)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" size={16} />
+                  </div>
+
+                  <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-[#333]">
+                    <button
+                      onClick={() => setUpdatePopup(null)}
+                      className="text-xs px-3 py-1.5 rounded text-gray-400 hover:text-white hover:bg-[#3a3a3a] transition-colors"
+                      disabled={updatingVersion}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleApplyVersionUpdate}
+                      className="text-xs px-3 py-1.5 rounded font-medium bg-[#E5B80B] text-black hover:bg-[#d4a90a] transition-colors disabled:opacity-50"
+                      disabled={updatingVersion}
+                    >
+                      {updatingVersion ? 'Updating...' : 'Accept'}
                     </button>
                   </div>
                 </div>

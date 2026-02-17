@@ -1,6 +1,10 @@
 package minecraft
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,6 +19,8 @@ type AppSettings struct {
 	DefaultMaxRAM      string `json:"defaultMaxRam,omitempty"`
 	DefaultFlags       string `json:"defaultFlags,omitempty"`
 	StatusPollInterval int    `json:"statusPollInterval,omitempty"`
+	LoginUser          string `json:"loginUser,omitempty"`
+	LoginPasswordHash  string `json:"loginPasswordHash,omitempty"`
 }
 
 var (
@@ -24,6 +30,42 @@ var (
 
 func defaultUserAgent() string {
 	return "MC-AdPanel/1.0 (+https://github.com/pbarrera813/MC-AdPanel)"
+}
+
+func defaultLoginUser() string {
+	return "mcpanel"
+}
+
+func defaultLoginPassword() string {
+	return "mcpanel"
+}
+
+func hashPassword(password string) (string, error) {
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return "", fmt.Errorf("failed to generate salt: %w", err)
+	}
+	sum := sha256.Sum256(append(salt, []byte(password)...))
+	saltB64 := base64.RawStdEncoding.EncodeToString(salt)
+	hashB64 := base64.RawStdEncoding.EncodeToString(sum[:])
+	return "sha256$" + saltB64 + "$" + hashB64, nil
+}
+
+func verifyPassword(storedHash, password string) bool {
+	parts := strings.Split(storedHash, "$")
+	if len(parts) != 3 || parts[0] != "sha256" {
+		return false
+	}
+	salt, err := base64.RawStdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return false
+	}
+	want, err := base64.RawStdEncoding.DecodeString(parts[2])
+	if err != nil {
+		return false
+	}
+	sum := sha256.Sum256(append(salt, []byte(password)...))
+	return subtle.ConstantTimeCompare(sum[:], want) == 1
 }
 
 func setUserAgentOverride(ua string) {
@@ -61,6 +103,9 @@ func applySettingsDefaults(cfg *AppSettings) {
 	if cfg.StatusPollInterval <= 0 {
 		cfg.StatusPollInterval = 3
 	}
+	if strings.TrimSpace(cfg.LoginUser) == "" {
+		cfg.LoginUser = defaultLoginUser()
+	}
 }
 
 func (m *Manager) loadSettings() error {
@@ -74,9 +119,23 @@ func (m *Manager) loadSettings() error {
 	data, err := os.ReadFile(m.settingsFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			m.settings = AppSettings{UserAgent: effectiveUserAgent()}
+			defaultHash, hashErr := hashPassword(defaultLoginPassword())
+			if hashErr != nil {
+				return hashErr
+			}
+			m.settings = AppSettings{
+				UserAgent:         effectiveUserAgent(),
+				LoginUser:         defaultLoginUser(),
+				LoginPasswordHash: defaultHash,
+			}
 			applySettingsDefaults(&m.settings)
 			setUserAgentOverride(m.settings.UserAgent)
+			if err := os.MkdirAll(filepath.Dir(m.settingsFile), 0755); err != nil {
+				return fmt.Errorf("failed to create settings directory: %w", err)
+			}
+			if err := m.persistSettings(); err != nil {
+				return err
+			}
 			return nil
 		}
 		return fmt.Errorf("failed to read settings file: %w", err)
@@ -90,9 +149,27 @@ func (m *Manager) loadSettings() error {
 	if cfg.UserAgent == "" {
 		cfg.UserAgent = effectiveUserAgent()
 	}
+	needsPersist := false
+	if strings.TrimSpace(cfg.LoginUser) == "" {
+		cfg.LoginUser = defaultLoginUser()
+		needsPersist = true
+	}
+	if strings.TrimSpace(cfg.LoginPasswordHash) == "" {
+		defaultHash, hashErr := hashPassword(defaultLoginPassword())
+		if hashErr != nil {
+			return hashErr
+		}
+		cfg.LoginPasswordHash = defaultHash
+		needsPersist = true
+	}
 	applySettingsDefaults(&cfg)
 	m.settings = cfg
 	setUserAgentOverride(cfg.UserAgent)
+	if needsPersist {
+		if err := m.persistSettings(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -122,10 +199,11 @@ func (m *Manager) GetSettings() AppSettings {
 		s.UserAgent = effectiveUserAgent()
 	}
 	applySettingsDefaults(&s)
+	s.LoginPasswordHash = ""
 	return s
 }
 
-func (m *Manager) UpdateAppSettings(userAgent, defaultMinRAM, defaultMaxRAM, defaultFlags string, statusPollInterval int) (AppSettings, error) {
+func (m *Manager) UpdateAppSettings(userAgent, defaultMinRAM, defaultMaxRAM, defaultFlags string, statusPollInterval int, loginUser, loginPassword string) (AppSettings, error) {
 	m.settingsMu.Lock()
 	defer m.settingsMu.Unlock()
 
@@ -140,6 +218,32 @@ func (m *Manager) UpdateAppSettings(userAgent, defaultMinRAM, defaultMaxRAM, def
 	if statusPollInterval > 30 {
 		statusPollInterval = 30
 	}
+	loginUser = strings.TrimSpace(loginUser)
+	if loginUser == "" {
+		loginUser = m.settings.LoginUser
+	}
+	if loginUser == "" {
+		loginUser = defaultLoginUser()
+	}
+
+	passwordHash := m.settings.LoginPasswordHash
+	if strings.TrimSpace(loginPassword) != "" {
+		if len(loginPassword) < 4 {
+			return AppSettings{}, fmt.Errorf("password must be at least 4 characters")
+		}
+		hashed, err := hashPassword(loginPassword)
+		if err != nil {
+			return AppSettings{}, err
+		}
+		passwordHash = hashed
+	}
+	if strings.TrimSpace(passwordHash) == "" {
+		hashed, err := hashPassword(defaultLoginPassword())
+		if err != nil {
+			return AppSettings{}, err
+		}
+		passwordHash = hashed
+	}
 
 	m.settings = AppSettings{
 		UserAgent:          ua,
@@ -147,6 +251,8 @@ func (m *Manager) UpdateAppSettings(userAgent, defaultMinRAM, defaultMaxRAM, def
 		DefaultMaxRAM:      defaultMaxRAM,
 		DefaultFlags:       defaultFlags,
 		StatusPollInterval: statusPollInterval,
+		LoginUser:          loginUser,
+		LoginPasswordHash:  passwordHash,
 	}
 	applySettingsDefaults(&m.settings)
 	setUserAgentOverride(ua)
@@ -157,5 +263,24 @@ func (m *Manager) UpdateAppSettings(userAgent, defaultMinRAM, defaultMaxRAM, def
 	if err := m.persistSettings(); err != nil {
 		return AppSettings{}, err
 	}
-	return m.settings, nil
+	result := m.settings
+	result.LoginPasswordHash = ""
+	return result, nil
+}
+
+func (m *Manager) ValidateLogin(username, password string) bool {
+	m.settingsMu.RLock()
+	defer m.settingsMu.RUnlock()
+
+	if strings.TrimSpace(username) != m.settings.LoginUser {
+		return false
+	}
+	return verifyPassword(m.settings.LoginPasswordHash, password)
+}
+
+func (m *Manager) IsUsingDefaultLogin() bool {
+	m.settingsMu.RLock()
+	defer m.settingsMu.RUnlock()
+
+	return m.settings.LoginUser == defaultLoginUser() && verifyPassword(m.settings.LoginPasswordHash, defaultLoginPassword())
 }

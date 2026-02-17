@@ -27,12 +27,14 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		DefaultMaxRAM      string `json:"defaultMaxRam"`
 		DefaultFlags       string `json:"defaultFlags"`
 		StatusPollInterval int    `json:"statusPollInterval"`
+		LoginUser          string `json:"loginUser"`
+		LoginPassword      string `json:"loginPassword"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
-	settings, err := h.mgr.UpdateAppSettings(req.UserAgent, req.DefaultMinRAM, req.DefaultMaxRAM, req.DefaultFlags, req.StatusPollInterval)
+	settings, err := h.mgr.UpdateAppSettings(req.UserAgent, req.DefaultMinRAM, req.DefaultMaxRAM, req.DefaultFlags, req.StatusPollInterval, req.LoginUser, req.LoginPassword)
 	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return

@@ -243,6 +243,30 @@ func (h *ServerHandler) RetryInstall(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, status)
 }
 
+// UpdateVersion handles PUT /api/servers/{id}/version
+func (h *ServerHandler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if req.Version == "" {
+		respondError(w, http.StatusBadRequest, "version is required")
+		return
+	}
+
+	server, err := h.mgr.UpdateVersion(id, req.Version)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, server)
+}
+
 // UpdateSettings handles PUT /api/servers/{id}/settings
 func (h *ServerHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")

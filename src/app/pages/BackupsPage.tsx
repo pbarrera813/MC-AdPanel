@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useServer, Backup } from '../context/ServerContext';
-import { Archive, Clock, Download, Upload, Trash2, Plus, Loader2, AlertTriangle, CalendarClock, X } from 'lucide-react';
+import { Archive, Clock, Download, Upload, Trash2, Plus, Loader2, AlertTriangle, CalendarClock, X, Check, Square } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
@@ -240,19 +240,38 @@ export const BackupsPage = () => {
               )}
             >
               <div className="flex items-center gap-4">
-                <input
-                  type="checkbox"
-                  checked={selectedBackups.has(backup.name)}
-                  onChange={() => handleToggleBackupSelect(backup.name)}
-                  onClick={(e) => e.stopPropagation()}
-                  className="accent-[#E5B80B] w-4 h-4 cursor-pointer flex-shrink-0"
-                />
+                <span
+                  role="checkbox"
+                  tabIndex={0}
+                  aria-checked={selectedBackups.has(backup.name)}
+                  aria-label={selectedBackups.has(backup.name) ? `Selected backup ${backup.name}` : `Select backup ${backup.name}`}
+                  onClick={(e) => { e.stopPropagation(); handleToggleBackupSelect(backup.name); }}
+                  onKeyDown={(e) => {
+                    if (e.key === ' ' || e.key === 'Enter') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleToggleBackupSelect(backup.name);
+                    }
+                  }}
+                  className={clsx('flex-shrink-0 cursor-pointer', selectedBackups.has(backup.name) ? 'text-[#E5B80B]' : 'text-gray-600')}
+                  title={selectedBackups.has(backup.name) ? 'Selected' : 'Select'}
+                >
+                  {selectedBackups.has(backup.name) ? <Check size={16} /> : <Square size={16} />}
+                </span>
                 <div className="w-12 h-12 bg-[#2a2a29] rounded flex items-center justify-center text-[#E5B80B]">
                   <Archive size={24} />
                 </div>
                 <div>
-                  <div className="font-bold text-white text-lg">{format(new Date(backup.date), 'MMM d, yyyy')}</div>
-                  <div className="text-sm text-gray-500 font-mono">{format(new Date(backup.date), 'HH:mm:ss')} &bull; {backup.size}</div>
+                  {(() => {
+                    const parsed = backup.date ? new Date(backup.date) : null;
+                    const valid = parsed && !isNaN(parsed.getTime());
+                    return (
+                      <>
+                        <div className="font-bold text-white text-lg">{valid ? format(parsed as Date, 'MMM d, yyyy') : '—'}</div>
+                        <div className="text-sm text-gray-500 font-mono">{valid ? format(parsed as Date, 'HH:mm:ss') : '—'} &bull; {backup.size}</div>
+                      </>
+                    );
+                  })()}
                   <div className="text-xs text-gray-600 font-mono mt-0.5">{backup.name}</div>
                 </div>
               </div>

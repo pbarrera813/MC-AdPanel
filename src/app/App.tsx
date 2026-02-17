@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Toaster } from 'sonner';
+import React, { useState, useEffect } from 'react';
+import { Toaster, toast } from 'sonner';
 import { ServerProvider } from './context/ServerContext';
 import { Sidebar } from './components/Sidebar';
 import { ServersPage } from './pages/ServersPage';
@@ -9,9 +9,11 @@ import { BackupsPage } from './pages/BackupsPage';
 import { LogsPage } from './pages/LogsPage';
 import { CloningPage } from './pages/CloningPage';
 import { SystemSettingsPage } from './pages/SystemSettingsPage';
+import { LoginPage } from './pages/LoginPage';
 import { Sheet, SheetTrigger, SheetContent } from './components/ui/sheet';
 import { Menu } from 'lucide-react';
 import { ServerSwitcher } from './components/ServerSwitcher';
+import ErrorBoundary from './components/ErrorBoundary';
 
 type View = 'servers' | 'management' | 'plugins' | 'backups' | 'logs' | 'cloning' | 'settings';
 
@@ -81,9 +83,68 @@ function MainLayout() {
 }
 
 export default function App() {
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authenticated, setAuthenticated] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const checkSession = async () => {
+      try {
+        const res = await fetch('/api/auth/session');
+        if (!res.ok) throw new Error('Failed to verify session');
+        const data = await res.json();
+        if (!cancelled) setAuthenticated(Boolean(data.authenticated));
+      } catch {
+        if (!cancelled) setAuthenticated(false);
+      } finally {
+        if (!cancelled) setAuthChecked(true);
+      }
+    };
+    checkSession();
+    return () => { cancelled = true; };
+  }, []);
+
+  React.useEffect(() => {
+    const handler = (ev: any) => {
+      // surface global errors in console and optional toast so developer can copy stack
+      // eslint-disable-next-line no-console
+      console.error('Global error:', ev?.error || ev?.reason || ev);
+      try { toast.error('An unexpected error occurred — check console for details'); } catch {}
+    };
+
+    window.addEventListener('error', handler);
+    window.addEventListener('unhandledrejection', handler as any);
+    return () => {
+      window.removeEventListener('error', handler);
+      window.removeEventListener('unhandledrejection', handler as any);
+    };
+  }, []);
+
+  if (!authChecked) {
+    return (
+      <>
+        <div className="w-full h-screen bg-gradient-to-br from-[#3a3a39] via-[#2C2C2B] to-[#1e1e1d] flex items-center justify-center text-gray-300">
+          Loading...
+        </div>
+        <Toaster theme="dark" position="bottom-right" richColors closeButton />
+      </>
+    );
+  }
+
+  if (!authenticated) {
+    return (
+      <>
+        <LoginPage onLoginSuccess={() => setAuthenticated(true)} />
+        <Toaster theme="dark" position="bottom-right" richColors closeButton />
+      </>
+    );
+  }
+
   return (
     <ServerProvider>
-      <MainLayout />
+      <ErrorBoundary>
+        <MainLayout />
+      </ErrorBoundary>
       <Toaster theme="dark" position="bottom-right" richColors closeButton />
     </ServerProvider>
   );

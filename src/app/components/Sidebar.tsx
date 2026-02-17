@@ -15,11 +15,12 @@ interface SidebarProps {
 
 export const Sidebar = ({ currentView, setCurrentView, className }: SidebarProps) => {
   const { activeServer } = useServer();
+  const pluginsUnsupportedForType = activeServer?.type === 'Vanilla';
 
   const menuItems = [
     { id: 'servers', label: 'Servers', icon: Layers },
     { id: 'management', label: 'Management', icon: Terminal, disabled: !activeServer },
-    { id: 'plugins', label: 'Plugins / Mods', icon: Box, disabled: !activeServer },
+    { id: 'plugins', label: 'Plugins / Mods', icon: Box, disabled: !activeServer || pluginsUnsupportedForType, disabledReason: pluginsUnsupportedForType ? 'Not supported on this server type' : '' },
     { id: 'backups', label: 'Backups', icon: Database, disabled: !activeServer },
     { id: 'logs', label: 'Logs', icon: FileText, disabled: !activeServer },
     { id: 'cloning', label: 'Cloning', icon: Copy, disabled: !activeServer },
@@ -45,6 +46,7 @@ export const Sidebar = ({ currentView, setCurrentView, className }: SidebarProps
               key={item.id}
               onClick={() => !item.disabled && setCurrentView(item.id as View)}
               disabled={item.disabled}
+              title={item.disabledReason || undefined}
               className={clsx(
                 "w-full flex items-center gap-3 px-3 py-3 rounded-md transition-colors text-sm font-medium",
                 currentView === item.id 

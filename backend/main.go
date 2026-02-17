@@ -49,6 +49,7 @@ func main() {
 	logHandler := handlers.NewLogHandler(mgr)
 	versionHandler := handlers.NewVersionHandler(mgr)
 	settingsHandler := handlers.NewSettingsHandler(mgr)
+	authHandler := handlers.NewAuthHandler(mgr)
 
 	// Set up router using Go 1.22+ ServeMux
 	mux := http.NewServeMux()
@@ -63,6 +64,7 @@ func main() {
 	mux.HandleFunc("POST /api/servers/{id}/schedule-restart", serverHandler.ScheduleRestart)
 	mux.HandleFunc("DELETE /api/servers/{id}/schedule-restart", serverHandler.CancelRestart)
 	mux.HandleFunc("POST /api/servers/{id}/retry-install", serverHandler.RetryInstall)
+	mux.HandleFunc("PUT /api/servers/{id}/version", serverHandler.UpdateVersion)
 	mux.HandleFunc("PUT /api/servers/{id}/settings", serverHandler.UpdateSettings)
 	mux.HandleFunc("PUT /api/servers/{id}/auto-start", serverHandler.SetAutoStart)
 	mux.HandleFunc("PUT /api/servers/{id}/flags", serverHandler.SetFlags)
@@ -76,6 +78,11 @@ func main() {
 	// System settings
 	mux.HandleFunc("GET /api/settings", settingsHandler.Get)
 	mux.HandleFunc("PUT /api/settings", settingsHandler.Update)
+
+	// Authentication
+	mux.HandleFunc("POST /api/auth/login", authHandler.Login)
+	mux.HandleFunc("POST /api/auth/logout", authHandler.Logout)
+	mux.HandleFunc("GET /api/auth/session", authHandler.Session)
 
 	// Crash reports
 	mux.HandleFunc("GET /api/servers/{id}/crash-reports", crashHandler.List)
@@ -95,6 +102,7 @@ func main() {
 	mux.HandleFunc("POST /api/servers/{id}/plugins", pluginHandler.Upload)
 	mux.HandleFunc("DELETE /api/servers/{id}/plugins/{name}", pluginHandler.Delete)
 	mux.HandleFunc("PUT /api/servers/{id}/plugins/{name}/toggle", pluginHandler.Toggle)
+	mux.HandleFunc("PUT /api/servers/{id}/plugins/{name}/source", pluginHandler.SetSource)
 	mux.HandleFunc("GET /api/servers/{id}/plugins/check-updates", pluginHandler.CheckUpdates)
 	mux.HandleFunc("POST /api/servers/{id}/plugins/{name}/update", pluginHandler.Update)
 
@@ -127,7 +135,7 @@ func main() {
 	mux.Handle("/", spaHandler(distDir))
 
 	// Wrap with CORS middleware
-	handler := corsMiddleware(mux)
+	handler := corsMiddleware(authHandler.Middleware(mux))
 
 	log.Println("=== Minecraft Admin Panel ===")
 	log.Printf("Servers directory: %s", filepath.Join(baseDir, "Servers"))

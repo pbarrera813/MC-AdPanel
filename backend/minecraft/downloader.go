@@ -72,6 +72,7 @@ func (vc *versionCache) Set(serverType string, versions []VersionInfo) {
 // ---------------------------------------------------------------------------
 
 var providers = map[string]JarProvider{
+	"vanilla":   &VanillaProvider{},
 	"paper":     &PaperMCProvider{project: "paper"},
 	"folia":     &PaperMCProvider{project: "folia"},
 	"velocity":  &PaperMCProvider{project: "velocity"},
@@ -792,4 +793,99 @@ func compareVersions(a, b string) int {
 		}
 	}
 	return 0
+}
+
+// ---------------------------------------------------------------------------
+// Vanilla Provider
+// ---------------------------------------------------------------------------
+
+type VanillaProvider struct{}
+
+type mojangVersionManifest struct {
+	Latest struct {
+		Release string `json:"release"`
+	} `json:"latest"`
+	Versions []struct {
+		ID          string `json:"id"`
+		Type        string `json:"type"`
+		URL         string `json:"url"`
+		ReleaseTime string `json:"releaseTime"`
+	} `json:"versions"`
+}
+
+type mojangVersionMeta struct {
+	Downloads struct {
+		Server struct {
+			URL string `json:"url"`
+		} `json:"server"`
+	} `json:"downloads"`
+}
+
+func (p *VanillaProvider) FetchVersions(ctx context.Context) ([]VersionInfo, error) {
+	var manifest mojangVersionManifest
+	if err := fetchJSON(ctx, "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json", &manifest); err != nil {
+		return nil, err
+	}
+
+	versions := make([]VersionInfo, 0, len(manifest.Versions))
+	for _, v := range manifest.Versions {
+		if !strings.EqualFold(v.Type, "release") {
+			continue
+		}
+		versions = append(versions, VersionInfo{
+			Version: v.ID,
+			Latest:  v.ID == manifest.Latest.Release,
+		})
+	}
+
+	if len(versions) > 0 {
+		hasLatest := false
+		for i := range versions {
+			if versions[i].Latest {
+				hasLatest = true
+				break
+			}
+		}
+		if !hasLatest {
+			versions[0].Latest = true
+		}
+	}
+	return versions, nil
+}
+
+func (p *VanillaProvider) DownloadJar(ctx context.Context, version string, destDir string, progressFn func(string)) error {
+	resolved, err := resolveLatest(ctx, p, version)
+	if err != nil {
+		return err
+	}
+
+	var manifest mojangVersionManifest
+	if err := fetchJSON(ctx, "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json", &manifest); err != nil {
+		return err
+	}
+
+	metaURL := ""
+	for _, v := range manifest.Versions {
+		if v.ID == resolved {
+			metaURL = v.URL
+			break
+		}
+	}
+	if metaURL == "" {
+		return fmt.Errorf("vanilla version %s not found", resolved)
+	}
+
+	var meta mojangVersionMeta
+	if err := fetchJSON(ctx, metaURL, &meta); err != nil {
+		return fmt.Errorf("failed to fetch vanilla version metadata: %w", err)
+	}
+	if strings.TrimSpace(meta.Downloads.Server.URL) == "" {
+		return fmt.Errorf("server jar URL unavailable for vanilla %s", resolved)
+	}
+
+	if progressFn != nil {
+		progressFn(fmt.Sprintf("Downloading Vanilla %s...", resolved))
+	}
+
+	return downloadFile(ctx, meta.Downloads.Server.URL, filepath.Join(destDir, "server.jar"), progressFn)
 }

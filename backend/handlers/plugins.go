@@ -122,3 +122,28 @@ func (h *PluginHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	respondJSON(w, http.StatusOK, plugin)
 }
+
+// SetSource handles PUT /api/servers/{id}/plugins/{name}/source
+func (h *PluginHandler) SetSource(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	name := r.PathValue("name")
+
+	var req struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if req.URL == "" {
+		respondError(w, http.StatusBadRequest, "Source URL is required")
+		return
+	}
+
+	if err := h.mgr.SetPluginSource(id, name, req.URL); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+}

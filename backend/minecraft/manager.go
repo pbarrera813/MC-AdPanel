@@ -75,6 +75,7 @@ type PluginInfo struct {
 	LatestVersion string `json:"latestVersion,omitempty"`
 	VersionStatus string `json:"versionStatus,omitempty"`
 	UpdateURL     string `json:"updateUrl,omitempty"`
+	SourceURL     string `json:"sourceUrl,omitempty"`
 }
 
 // BackupInfo represents a backup archive
@@ -145,7 +146,7 @@ type runningServer struct {
 	stopMetrics        chan struct{}
 }
 
-const maxLogBuffer = 500
+const maxLogBuffer = 0
 const logTrimSize = 100
 
 // Regex patterns for player tracking and server info
@@ -322,6 +323,13 @@ func (m *Manager) refreshPingSupport(id string) {
 		rs.mu.Unlock()
 		return
 	}
+	if strings.EqualFold(cfg.Type, "vanilla") {
+		rs.mu.Lock()
+		rs.pingSupported = false
+		rs.pingDisabledReason = "unsupported_server_type"
+		rs.mu.Unlock()
+		return
+	}
 
 	pluginsDir := filepath.Join(cfg.Dir, "plugins")
 	supported := hasPingPlayer(pluginsDir)
@@ -365,6 +373,10 @@ func NewManager(baseDir string) (*Manager, error) {
 	}
 	if err := mgr.loadSettings(); err != nil {
 		return nil, err
+	}
+	if mgr.IsUsingDefaultLogin() {
+		log.Printf("Auth initialized with default credentials: username=%q password=%q", "mcpanel", "mcpanel")
+		log.Printf("Change default credentials in System Settings after first login.")
 	}
 
 	for id := range mgr.configs {
@@ -1223,7 +1235,7 @@ func (m *Manager) appendLog(rs *runningServer, line string) {
 	defer rs.mu.Unlock()
 
 	rs.logBuffer = append(rs.logBuffer, line)
-	if len(rs.logBuffer) > maxLogBuffer {
+	if maxLogBuffer > 0 && len(rs.logBuffer) > maxLogBuffer {
 		rs.logBuffer = rs.logBuffer[logTrimSize:]
 	}
 }
@@ -1366,6 +1378,48 @@ func (m *Manager) UpdateSettings(id, minRAM, maxRAM string, maxPlayers int, port
 		os.WriteFile(propsPath, []byte(strings.Join(lines, "\n")), 0644)
 	}
 
+	return m.serverInfo(id), nil
+}
+
+// UpdateVersion updates a server to a newer server jar version (server must be stopped).
+func (m *Manager) UpdateVersion(id, version string) (*ServerInfo, error) {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return nil, fmt.Errorf("version is required")
+	}
+
+	m.mu.Lock()
+	cfg, ok := m.configs[id]
+	rs, rsOk := m.running[id]
+	if !ok || !rsOk {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("server %s not found", id)
+	}
+
+	rs.mu.RLock()
+	status := rs.status
+	rs.mu.RUnlock()
+	if status == "Running" {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("Can't update while server is running.")
+	}
+	if status == "Booting" || status == "Installing" {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("server is busy")
+	}
+
+	rs.mu.Lock()
+	rs.status = "Installing"
+	rs.installError = ""
+	rs.mu.Unlock()
+
+	serverType := cfg.Type
+	m.mu.Unlock()
+
+	go m.installServerJar(id, serverType, version)
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.serverInfo(id), nil
 }
 
@@ -1538,6 +1592,54 @@ func extensionsDir(cfg *ServerConfig) string {
 	}
 }
 
+func extensionSourcesPath(cfg *ServerConfig) string {
+	return filepath.Join(cfg.Dir, ".adpanel-extension-sources.json")
+}
+
+func normalizeExtensionSourceKey(fileName string) string {
+	name := strings.TrimSpace(filepath.Base(fileName))
+	if strings.HasSuffix(strings.ToLower(name), ".disabled") {
+		name = name[:len(name)-len(".disabled")]
+	}
+	return name
+}
+
+func loadExtensionSources(cfg *ServerConfig) map[string]string {
+	path := extensionSourcesPath(cfg)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return map[string]string{}
+	}
+
+	var sources map[string]string
+	if err := json.Unmarshal(data, &sources); err != nil {
+		return map[string]string{}
+	}
+	if sources == nil {
+		return map[string]string{}
+	}
+	return sources
+}
+
+func saveExtensionSources(cfg *ServerConfig, sources map[string]string) error {
+	if sources == nil {
+		sources = map[string]string{}
+	}
+	data, err := json.MarshalIndent(sources, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(extensionSourcesPath(cfg), data, 0644)
+}
+
+func sourceForFile(sources map[string]string, fileName string) string {
+	if sources == nil {
+		return ""
+	}
+	key := normalizeExtensionSourceKey(fileName)
+	return strings.TrimSpace(sources[key])
+}
+
 // ListPlugins scans the plugins/ or mods/ directory for .jar files
 func (m *Manager) ListPlugins(id string) ([]PluginInfo, error) {
 	m.mu.RLock()
@@ -1556,6 +1658,7 @@ func (m *Manager) ListPlugins(id string) ([]PluginInfo, error) {
 		return nil, err
 	}
 
+	sources := loadExtensionSources(cfg)
 	plugins := make([]PluginInfo, 0)
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -1574,11 +1677,12 @@ func (m *Manager) ListPlugins(id string) ([]PluginInfo, error) {
 				pName = strings.TrimSuffix(strings.TrimSuffix(entry.Name(), ".disabled"), ".jar")
 			}
 			plugins = append(plugins, PluginInfo{
-				Name:     pName,
-				FileName: entry.Name(),
-				Size:     formatFileSize(info.Size()),
-				Enabled:  false,
-				Version:  pVersion,
+				Name:      pName,
+				FileName:  entry.Name(),
+				Size:      formatFileSize(info.Size()),
+				Enabled:   false,
+				Version:   pVersion,
+				SourceURL: sourceForFile(sources, entry.Name()),
 			})
 		} else if strings.HasSuffix(lower, ".jar") {
 			jarPath := filepath.Join(pluginsDir, entry.Name())
@@ -1587,11 +1691,12 @@ func (m *Manager) ListPlugins(id string) ([]PluginInfo, error) {
 				pName = strings.TrimSuffix(entry.Name(), ".jar")
 			}
 			plugins = append(plugins, PluginInfo{
-				Name:     pName,
-				FileName: entry.Name(),
-				Size:     formatFileSize(info.Size()),
-				Enabled:  true,
-				Version:  pVersion,
+				Name:      pName,
+				FileName:  entry.Name(),
+				Size:      formatFileSize(info.Size()),
+				Enabled:   true,
+				Version:   pVersion,
+				SourceURL: sourceForFile(sources, entry.Name()),
 			})
 		}
 	}
@@ -1633,7 +1738,19 @@ func (m *Manager) DeletePlugin(id, fileName string) error {
 		return err
 	}
 
-	return os.Remove(pluginPath)
+	if err := os.Remove(pluginPath); err != nil {
+		return err
+	}
+
+	sources := loadExtensionSources(cfg)
+	key := normalizeExtensionSourceKey(fileName)
+	if _, ok := sources[key]; ok {
+		delete(sources, key)
+		if err := saveExtensionSources(cfg, sources); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // TogglePlugin enables/disables a plugin by renaming .jar <-> .jar.disabled
@@ -1660,6 +1777,16 @@ func (m *Manager) TogglePlugin(id, fileName string) (*PluginInfo, error) {
 		if err := os.Rename(oldPath, newPath); err != nil {
 			return nil, err
 		}
+		sources := loadExtensionSources(cfg)
+		oldKey := normalizeExtensionSourceKey(fileName)
+		newKey := normalizeExtensionSourceKey(newName)
+		if oldKey != newKey {
+			if src, ok := sources[oldKey]; ok && strings.TrimSpace(src) != "" {
+				sources[newKey] = src
+				delete(sources, oldKey)
+				_ = saveExtensionSources(cfg, sources)
+			}
+		}
 		info, _ := os.Stat(newPath)
 		size := "0 B"
 		if info != nil {
@@ -1684,6 +1811,16 @@ func (m *Manager) TogglePlugin(id, fileName string) (*PluginInfo, error) {
 	}
 	if err := os.Rename(oldPath, newPath); err != nil {
 		return nil, err
+	}
+	sources := loadExtensionSources(cfg)
+	oldKey := normalizeExtensionSourceKey(fileName)
+	newKey := normalizeExtensionSourceKey(newName)
+	if oldKey != newKey {
+		if src, ok := sources[oldKey]; ok && strings.TrimSpace(src) != "" {
+			sources[newKey] = src
+			delete(sources, oldKey)
+			_ = saveExtensionSources(cfg, sources)
+		}
 	}
 	info, _ := os.Stat(newPath)
 	size := "0 B"
@@ -2224,6 +2361,9 @@ func (m *Manager) GetPingSupport(id string) (bool, string, error) {
 		}
 		return true, "", nil
 	}
+	if strings.EqualFold(cfg.Type, "vanilla") {
+		return false, "unsupported_server_type", nil
+	}
 
 	pluginsDir := filepath.Join(cfg.Dir, "plugins")
 	if !hasPingPlayer(pluginsDir) {
@@ -2733,11 +2873,6 @@ func (m *Manager) installServerJar(id, serverType, version string) {
 		if strings.EqualFold(actualVersion, "latest") || actualVersion == "" {
 			actualVersion = versions[0].Version
 		}
-		// Update config with resolved version
-		m.mu.Lock()
-		cfg.Version = actualVersion
-		m.persist()
-		m.mu.Unlock()
 	}
 
 	progressFn := func(msg string) {
@@ -2771,6 +2906,12 @@ func (m *Manager) installServerJar(id, serverType, version string) {
 			progressFn("Detected run.sh — server will use Forge/NeoForge launch script.")
 		}
 	}
+
+	// Persist resolved/new version after a successful install/update.
+	m.mu.Lock()
+	cfg.Version = actualVersion
+	m.persist()
+	m.mu.Unlock()
 
 	rs.mu.Lock()
 	rs.status = "Stopped"

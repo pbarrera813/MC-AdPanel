@@ -390,7 +390,6 @@ const LiveLogs = () => {
 
           setLogs(prev => {
             const newLogs = [...prev, parsed];
-            if (newLogs.length > 1000) return newLogs.slice(200);
             return newLogs;
           });
         }

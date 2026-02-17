@@ -264,3 +264,46 @@ input[type="number"].gold-spinner::-webkit-outer-spin-button {
 [data-sonner-toast] {
   padding-right: 40px !important;
 }
+
+/* Styled checkbox matching app palette: black box with gold check */
+.checkbox-gold {
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+  appearance: none !important;
+  display: inline-grid !important;
+  place-items: center !important;
+  width: 1rem !important;
+  height: 1rem !important;
+  background-color: #1a1a1a !important;
+  border: 1px solid #333 !important;
+  border-radius: 4px !important;
+  transition: border-color .15s, background-color .15s;
+  vertical-align: middle;
+  box-shadow: none !important;
+  accent-color: transparent !important; /* prevent native accent from coloring the box */
+  cursor: pointer;
+}
+.checkbox-gold::-ms-check { display: none; }
+.checkbox-gold:focus-visible {
+  outline: 2px solid rgba(229,184,11,0.12) !important;
+  outline-offset: 2px !important;
+  border-color: #E5B80B !important;
+}
+.checkbox-gold:checked {
+  background-color: #1a1a1a !important; /* keep box black */
+  border-color: #E5B80B !important;   /* gold border on checked */
+  box-shadow: none !important;
+}
+.checkbox-gold:checked::after {
+  content: "";
+  width: 0.45rem;
+  height: 0.25rem;
+  border-right: 2px solid #E5B80B;
+  border-bottom: 2px solid #E5B80B;
+  transform: rotate(45deg);
+  display: block;
+  box-sizing: content-box;
+  margin-bottom: 2px;
+}
+
+

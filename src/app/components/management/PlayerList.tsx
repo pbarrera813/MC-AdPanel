@@ -13,7 +13,7 @@ export const PlayerList = ({ server }: PlayerListProps) => {
   const [players, setPlayers] = useState<Player[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('');
-  const [pingStatus, setPingStatus] = useState<'supported' | 'missing_pingplayer' | 'missing_pingplayer_mod'>('supported');
+  const [pingStatus, setPingStatus] = useState<'supported' | 'missing_pingplayer' | 'missing_pingplayer_mod' | 'unsupported_server_type'>('supported');
 
   const fetchPlayers = useCallback(async () => {
     try {
@@ -27,6 +27,8 @@ export const PlayerList = ({ server }: PlayerListProps) => {
         setPlayers(data.players || []);
         if (data.pingSupported) {
           setPingStatus('supported');
+        } else if (data.pingStatus === 'unsupported_server_type') {
+          setPingStatus('unsupported_server_type');
         } else if (data.pingStatus === 'missing_pingplayer_mod') {
           setPingStatus('missing_pingplayer_mod');
         } else {
@@ -103,9 +105,11 @@ export const PlayerList = ({ server }: PlayerListProps) => {
     return 'bg-red-600';
   };
 
-  const pingHelpText = pingStatus === 'missing_pingplayer_mod'
-    ? 'Install the PlayerPing mod for this to work.'
-    : 'Unable to show ping, install pingplayer plugin in order to be able to see player\'s ping';
+  const pingHelpText = pingStatus === 'unsupported_server_type'
+    ? 'Not supported on this server type'
+    : pingStatus === 'missing_pingplayer_mod'
+      ? 'Install the PlayerPing mod for this to work.'
+      : 'Unable to show ping, install pingplayer plugin in order to be able to see player\'s ping';
 
   return (
     <div className="flex flex-col h-full bg-[#1e1e1d] p-4 md:p-6">
@@ -137,7 +141,20 @@ export const PlayerList = ({ server }: PlayerListProps) => {
               <tr>
                 <th className="px-4 py-3 font-medium border-b border-[#3a3a3a]">Player</th>
                 <th className="px-4 py-3 font-medium border-b border-[#3a3a3a] hidden md:table-cell">IP Address</th>
-                <th className="px-4 py-3 font-medium border-b border-[#3a3a3a] hidden lg:table-cell">Ping</th>
+                <th className="px-4 py-3 font-medium border-b border-[#3a3a3a] hidden lg:table-cell">
+                  {pingStatus === 'unsupported_server_type' ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="cursor-help">Ping</span>
+                      </TooltipTrigger>
+                      <TooltipContent className="bg-[#252524] border border-[#3a3a3a] px-3 py-2 text-gray-200">
+                        Not supported on this server type
+                      </TooltipContent>
+                    </Tooltip>
+                  ) : (
+                    'Ping'
+                  )}
+                </th>
                 <th className="px-4 py-3 font-medium border-b border-[#3a3a3a] hidden sm:table-cell">Online Time</th>
                 <th className="px-4 py-3 font-medium border-b border-[#3a3a3a] hidden lg:table-cell">Current World</th>
                 <th className="px-4 py-3 font-medium border-b border-[#3a3a3a] text-right">Actions</th>

@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 
 export type ServerStatus = 'Running' | 'Stopped' | 'Crashed' | 'Booting' | 'Installing' | 'Error';
-export type ServerType = 'Spigot' | 'Paper' | 'Folia' | 'Purpur' | 'Velocity' | 'Waterfall' | 'Forge' | 'Fabric' | 'NeoForge';
+export type ServerType = 'Vanilla' | 'Spigot' | 'Paper' | 'Folia' | 'Purpur' | 'Velocity' | 'Waterfall' | 'Forge' | 'Fabric' | 'NeoForge';
 
 export interface Server {
   id: string;
@@ -40,6 +40,7 @@ export interface Plugin {
   latestVersion?: string;
   versionStatus?: 'latest' | 'outdated' | 'incompatible' | 'unknown';
   updateUrl?: string;
+  sourceUrl?: string;
 }
 
 export interface Backup {

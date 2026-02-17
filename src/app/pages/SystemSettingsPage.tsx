@@ -5,6 +5,8 @@ import clsx from 'clsx';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../components/ui/tooltip';
 
 export const SystemSettingsPage = () => {
+  const [loginUser, setLoginUser] = useState('mcpanel');
+  const [loginPassword, setLoginPassword] = useState('');
   const [userAgent, setUserAgent] = useState('');
   const [defaultMinRam, setDefaultMinRam] = useState('0.5');
   const [defaultMaxRam, setDefaultMaxRam] = useState('1');
@@ -21,6 +23,7 @@ export const SystemSettingsPage = () => {
         if (!res.ok) throw new Error('Failed to load settings');
         const data = await res.json();
         if (isMounted) {
+          setLoginUser(data.loginUser || 'mcpanel');
           setUserAgent(data.userAgent || '');
           setDefaultMinRam(data.defaultMinRam || '0.5');
           setDefaultMaxRam(data.defaultMaxRam || '1');
@@ -38,6 +41,15 @@ export const SystemSettingsPage = () => {
   }, []);
 
   const handleSave = async () => {
+    if (!loginUser.trim()) {
+      toast.error('Insert a valid value.');
+      return;
+    }
+    if (loginPassword.trim() && loginPassword.length < 4) {
+      toast.error('Password must be at least 4 characters.');
+      return;
+    }
+
     // Validate Status Polling Interval
     const pollInterval = parseInt(String(statusPollInterval), 10);
     if (isNaN(pollInterval) || pollInterval < 1 || pollInterval > 30) {
@@ -50,13 +62,22 @@ export const SystemSettingsPage = () => {
       const res = await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userAgent, defaultMinRam, defaultMaxRam, defaultFlags, statusPollInterval: pollInterval }),
+        body: JSON.stringify({
+          loginUser: loginUser.trim(),
+          loginPassword,
+          userAgent,
+          defaultMinRam,
+          defaultMaxRam,
+          defaultFlags,
+          statusPollInterval: pollInterval,
+        }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || 'Failed to save settings');
       }
-      toast.success('System settings saved');
+      setLoginPassword('');
+      toast.success('Applied changes.');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save settings');
     } finally {
@@ -79,7 +100,36 @@ export const SystemSettingsPage = () => {
           </div>
         ) : (
           <>
+            {/* Login Credentials */}
+            <label className="block text-sm text-gray-400 mb-3">Login Credentials</label>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Username</label>
+                <input
+                  type="text"
+                  value={loginUser}
+                  onChange={(e) => setLoginUser(e.target.value)}
+                  className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B]"
+                  disabled={saving}
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Password</label>
+                <input
+                  type="password"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  placeholder="Leave empty to keep current password"
+                  className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B]"
+                  disabled={saving}
+                />
+              </div>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">These credentials are required to access the panel after restart.</p>
+            <p className="text-xs text-gray-500 mt-1">If setting a new password, minimum length is 4 characters.</p>
+
             {/* User-Agent */}
+            <hr className="border-[#3a3a3a] my-6" />
             <label className="block text-sm text-gray-400 mb-2">User-Agent for downloads</label>
             <Tooltip>
               <TooltipTrigger asChild>
