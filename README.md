@@ -14,123 +14,123 @@ MC AdPanel was born out of a simple need: managing Minecraft servers shouldn't b
 
 The goal was to build a **plug and play** experience. Install the Docker container, open your browser, and start creating servers. No config files to edit by hand, no terminal commands to memorize, no reverse proxies to set up. Just a clean web interface where you can:
 
-- Pick a server type and version from a dropdown
-- Click "Create" and the panel downloads everything for you
+- Pick a server type and version from a dropdown.
+- Click "Create" and the panel downloads everything for you.
 - Hit "Start" and you're playing (Remember to open the appropiate ports on your firewall, some people forget to do that!).
 
-Everything else â€” backups, plugins, file editing, monitoring â€” is right there in the same interface, designed to stay out of your way until you need it. One container, one port, zero friction.
+Everything else: backups, plugins, file editing, monitoring â€” is right there in the same interface, designed to stay out of your way until you need it. One container, one port, zero friction.
 
 ## Features
 
 ### Server Management
-- **Multi-server management** â€” Run multiple Minecraft servers simultaneously, each with its own port, type, and version
-- **10 server types supported** â€” Vanilla, Paper, Spigot, Purpur, Folia, Fabric, Forge, NeoForge, Velocity, Waterfall
-- **Automatic jar download** â€” Fetches the correct server jar from upstream APIs when you create a server (no manual downloads)
-- **Dynamic version fetching** â€” Versions are fetched live from upstream APIs with a 15-minute in-memory cache
-- **In-place server version upgrades** â€” Update server version from the Servers page (stopped servers only) by selecting a newer available version.
-- **Multi-select and batch operations** â€” Select multiple servers for batch deletion; running servers are blocked from deletion with a clear warning
-- **Inline rename** â€” Click on a selected server's name to rename it directly
-- **Delete server** â€” Permanently remove a server including all its files and backups, with confirmation safeguard
-- **Server cloning** â€” Clone an existing server with options to copy worlds, plugins, and configs; multi-select sources to batch clone with auto-naming and auto-incrementing ports
-- **Scheduled restarts** â€” Schedule a server restart after a configurable delay (5m, 30m, 1h, 3h, 6h, or custom time)
-- **Auto-start** â€” Per-server toggle to automatically start servers when the panel boots
-- **Safe mode** â€” Start a server with plugins/mods disabled (renames directories, restores them on stop)
+- **Multi-server management:** Run multiple Minecraft servers simultaneously, each with its own port, type, and version.
+- **10 server types supported:** Vanilla, Paper, Spigot, Purpur, Folia, Fabric, Forge, NeoForge, Velocity, Waterfall.
+- **Automatic jar download:** Fetches the correct server jar from upstream APIs when you create a server (no manual downloads).
+- **Dynamic version fetching:** Versions are fetched live from upstream APIs with a 15-minute in-memory cache.
+- **In-place server version upgrades:** Update server version from the Servers page (stopped servers only) by selecting a newer available version.
+- **Multi-select and batch operations:** Select multiple servers for batch deletion; running servers are blocked from deletion with a clear warning.
+- **Inline rename:** Click on a selected server's name to rename it directly.
+- **Delete server:** Permanently remove a server including all its files and backups, with confirmation safeguard.
+- **Server cloning:** Clone an existing server with options to copy worlds, plugins, and configs; multi-select sources to batch clone with auto-naming and auto-incrementing ports.
+- **Scheduled restarts:** Schedule a server restart after a configurable delay (5m, 30m, 1h, 3h, 6h, or custom time).
+- **Auto-start:** Per-server toggle to automatically start servers when the panel boots.
+- **Safe mode:** Start a server with plugins/mods disabled (renames directories, restores them on stop).
 
 ### JVM Flags
-- **Preset selection** â€” Choose from Aikar's Flags (optimized GC for game servers), Velocity & Waterfall (optimized for proxies), or no flags if you are just built like that you know.
-- **AlwaysPreTouch toggle** â€” Optionally enable `-XX:+AlwaysPreTouch` (pre-allocates memory at startup, useful if you want to remember how much ram the servers are using.)
-- **Configurable per-server** â€” Set flags at creation time or change them later from the server card
-- **Forge/NeoForge support** â€” Flags are written to `user_jvm_args.txt` for servers using `run.sh`
+- **Preset selection:** Choose from Aikar's Flags (optimized GC for game servers), Velocity & Waterfall (optimized for proxies), or no flags if you are just built like that you know.
+- **AlwaysPreTouch toggle:** Optionally enable `-XX:+AlwaysPreTouch` (pre-allocates memory at startup, useful if you want to remember how much ram the servers are using.)
+- **Configurable per-server:** Set flags at creation time or change them later from the server card
+- **Forge/NeoForge support:** Flags are written to `user_jvm_args.txt` for servers using `run.sh`
 
 ### Monitoring & Console
-- **Real-time console** â€” WebSocket-based live console with ANSI color rendering and command input.
-- **TPS monitoring** â€” Live TPS (Ticks Per Second) display with color-coded indicator and progress bar (green >=18, yellow >=15, red <15).
-- **Vanilla TPS behavior** â€” Vanilla servers show TPS as unsupported (Vanilla has no native `/tps` command).
-- **CPU usage graph** â€” Live area chart normalized to total system CPU (0-100%).
-- **RAM usage graph** â€” Real-time memory consumption tracking.
-- **Player tracking** â€” Online player list parsed from server logs with periodic `list` command verification to clean stale entries.
-- **Crash reports** â€” View, copy, download, and delete crash report files with multi-select for batch deletion.
+- **Real-time console:** WebSocket-based live console with ANSI color rendering and command input.
+- **TPS monitoring:** Live TPS (Ticks Per Second) display with color-coded indicator and progress bar (green >=18, yellow >=15, red <15).
+- **Vanilla TPS behavior:** Vanilla servers show TPS as unsupported (Vanilla has no native `/tps` command).
+- **CPU usage graph:** Live area chart normalized to total system CPU (0-100%).
+- **RAM usage graph:** Real-time memory consumption tracking.
+- **Player tracking:** Online player list parsed from server logs with periodic `list` command verification to clean stale entries.
+- **Crash reports:** View, copy, download, and delete crash report files with multi-select for batch deletion.
 
 ### Plugin & Mod Management
-- **Smart directory detection** â€” The backend automatically reads from the correct directory: `plugins/` for plugin-based servers (Paper, Spigot, Purpur, Folia, Velocity, Waterfall) and `mods/` for modded servers (Forge, Fabric, NeoForge).
-- **Dynamic labeling** â€” The interface automatically says "Plugins" for plugin-based servers and "Mods" for modded servers throughout the entire page.
-- **Vanilla behavior** â€” Plugins / Mods section is disabled for Vanilla servers with the message `Not supported on this server type`.
-- **Plugin/mod list** â€” View all installed plugins or mods with name, version, file size, and enabled/disabled status.
-- **Multi-select** â€” Click rows to select plugins/mods; dynamic action button adapts: "Check for updates" when nothing is selected, "Update selected" when some are selected, "Update all" when all are selected.
-- **Enable / Disable** â€” Toggle plugins/mods without deleting (`.jar` / `.jar.disabled` rename)
-- **Upload** â€” Drag-and-drop `.jar` upload with multi-file support.
-- **Delete** â€” Remove with confirmation.
-- **Update checking** â€” Check for outdated plugins/mods via Modrinth and Spiget APIs; update individually or batch update.
-- **Optional source URL per file** â€” Add and edit a source link for better update matching (Spigot/Modrinth for plugins, Modrinth/CurseForge for mods).
-- **Source-aware detection** â€” Update checks prioritize source IDs/URLs when available and fall back to exact-name matching when no source is configured.
-- **Version canonicalization** â€” Avoids false positives where versions are equal but differently formatted (for example reordered metadata segments).
-- **Stable release preference** â€” Update selection avoids unstable pre-releases/snapshots/build-only variants when possible.
-- **Safer replacement** â€” Update flow validates downloaded artifacts and only replaces when the downloaded version is actually newer.
-- **Version status badges** â€” Each plugin/mod shows its version status: Latest (green), Outdated (yellow), Incompatible (red), or Unknown.
+- **Smart directory detection:** The backend automatically reads from the correct directory: `plugins/` for plugin-based servers (Paper, Spigot, Purpur, Folia, Velocity, Waterfall) and `mods/` for modded servers (Forge, Fabric, NeoForge).
+- **Dynamic labeling:** The interface automatically says "Plugins" for plugin-based servers and "Mods" for modded servers throughout the entire page.
+- **Vanilla behavior:** Plugins / Mods section is disabled for Vanilla servers with the message `Not supported on this server type`.
+- **Plugin/mod list:** View all installed plugins or mods with name, version, file size, and enabled/disabled status.
+- **Multi-select:** Click rows to select plugins/mods; dynamic action button adapts: "Check for updates" when nothing is selected, "Update selected" when some are selected, "Update all" when all are selected.
+- **Enable / Disable:** Toggle plugins/mods without deleting (`.jar` / `.jar.disabled` rename).
+- **Upload:** Drag-and-drop `.jar` upload with multi-file support.
+- **Delete:** Remove with confirmation.
+- **Update checking:** Check for outdated plugins/mods via Modrinth and Spiget APIs; update individually or batch update.
+- **Optional source URL per file:** Add and edit a source link for better update matching (Spigot/Modrinth for plugins, Modrinth/CurseForge for mods).
+- **Source-aware detection:** Update checks prioritize source IDs/URLs when available and fall back to exact-name matching when no source is configured.
+- **Version canonicalization:** Avoids false positives where versions are equal but differently formatted (for example reordered metadata segments).
+- **Stable release preference:** Update selection avoids unstable pre-releases/snapshots/build-only variants when possible.
+- **Safer replacement:** Update flow validates downloaded artifacts and only replaces when the downloaded version is actually newer.
+- **Version status badges:** Each plugin/mod shows its version status: Latest (green), Outdated (yellow), Incompatible (red), or Unknown.
 
 
 ### Authentication
-- **Login screen** â€” Access is gated by a dedicated login page with session-based authentication.
-- **Default credentials** â€” First boot uses `mcpanel / mcpanel`.
-- **Credential management** â€” Username/password can be changed in **System Settings**.
-- **Password policy** â€” New passwords require at least 4 characters.
+- **Login screen:** Access is gated by a dedicated login page with session-based authentication.
+- **Default credentials:** First boot uses `mcpanel / mcpanel`.
+- **Credential management:** Username/password can be changed in **System Settings**.
+- **Password policy:** New passwords require at least 4 characters.
 ### Backup System
-- **Create backups** â€” One-click full server backup (`tar.gz` archive).
-- **Restore backups** â€” Restore any backup to replace current server files (server must be stopped).
-- **Download backups** â€” Download backup archives to your local machine.
-- **Delete backups** â€” Remove old backups with confirmation; multi-select for batch deletion.
-- **Scheduled backups** â€” Automatic backups on a recurring schedule: daily, weekly, monthly, every 6 months, or yearly.
+- **Create backups:** One-click full server backup (`tar.gz` archive).
+- **Restore backups:** Restore any backup to replace current server files (server must be stopped).
+- **Download backups:** Download backup archives to your local machine.
+- **Delete backups:** Remove old backups with confirmation; multi-select for batch deletion.
+- **Scheduled backups:** Automatic backups on a recurring schedule: daily, weekly, monthly, every 6 months, or yearly.
 
 ### File Browser
-- **Directory navigation** â€” Browse server files with breadcrumb path.
-- **File editor** â€” Edit text-based config files (`.properties`, `.yml`, `.json`, `.toml`, `.cfg`, `.xml`, etc.) directly in the browser.
-- **Rename files and folders** â€” Select a single file or folder and click the pencil icon to rename it.
-- **Upload files** â€” Drag-and-drop or click to upload; newly uploaded files are highlighted with a "New!" indicator until you navigate away.
-- **Download files** â€” Download single files directly or multiple files as a zip archive.
-- **Create folders** â€” New directory creation.
-- **Multi-select** â€” Select multiple files for batch download or deletion.
-- **Delete** â€” Remove files and folders.
-- **Path traversal protection** â€” Sandboxed to the server directory.
+- **Directory navigation:** Browse server files with breadcrumb path.
+- **File editor:** Edit text-based config files (`.properties`, `.yml`, `.json`, `.toml`, `.cfg`, `.xml`, etc.) directly in the browser.
+- **Rename files and folders:** Select a single file or folder and click the pencil icon to rename it.
+- **Upload files:** Drag-and-drop or click to upload; newly uploaded files are highlighted with a "New!" indicator until you navigate away.
+- **Download files:** Download single files directly or multiple files as a zip archive.
+- **Create folders:** New directory creation.
+- **Multi-select:** Select multiple files for batch download or deletion.
+- **Delete:** Remove files and folders.
+- **Path traversal protection:** Sandboxed to the server directory.
 
 ### Player Management
-- **Live player list** â€” Shows all online players with avatar, IP, ping, session time, and current world.
-- **Ping indicator** â€” Color-coded latency display (green <100ms, yellow 100-300ms, red >300ms).
-- **Vanilla ping behavior** â€” Ping column is marked unsupported for Vanilla servers with tooltip: `Not supported on this server type`.
-- **Current world** â€” Shows which dimension each player is in (Overworld, Nether, The End).
-- **Player search** â€” Filter players by name.
-- **Kick / Ban / Kill** â€” Player moderation actions with one click.
+- **Live player list:** Shows all online players with avatar, IP, ping, session time, and current world.
+- **Ping indicator:** Color-coded latency display (green <100ms, yellow 100-300ms, red >300ms).
+- **Vanilla ping behavior:** Ping column is marked unsupported for Vanilla servers with tooltip: `Not supported on this server type`.
+- **Current world:** Shows which dimension each player is in (Overworld, Nether, The End).
+- **Player search:** Filter players by name.
+- **Kick / Ban / Kill:** Player moderation actions with one click.
 
 ### Logs
-- **Live log viewer** â€” Real-time log streaming with level filtering (INFO, WARN, ERROR).
-- **Robust log parsing** â€” Strips ANSI and Minecraft color codes, detects all log levels (INFO, WARN/WARNING, ERROR/FATAL/SEVERE).
-- **Search logs** â€” Full-text search across log output.
-- **Pause / Resume** â€” Freeze the log stream for inspection.
+- **Live log viewer:** Real-time log streaming with level filtering (INFO, WARN, ERROR).
+- **Robust log parsing:** Strips ANSI and Minecraft color codes, detects all log levels (INFO, WARN/WARNING, ERROR/FATAL/SEVERE).
+- **Search logs:** Full-text search across log output.
+- **Pause / Resume:** Freeze the log stream for inspection.
 
 ### System Settings
-- **Panel credentials** â€” Change panel username and password used for login access.
-- **User-Agent configuration** â€” Set a custom User-Agent string used for all upstream API requests and downloads (hover tooltip warns non-technical users to leave it alone).
-- **Default RAM allocation** â€” Configure default min/max RAM for new servers (saves time when creating many servers).
-- **Default JVM flags preset** â€” Pre-select a JVM flags preset (None, Aikar's Flags, Velocity & Waterfall) for new servers.
-- **Status polling interval** â€” Configure how often the panel polls for server status updates (1-30 seconds).
-- **Persistent settings** â€” All settings are stored in `/AdPanel/data/settings.json` and survive restarts.
+- **Panel credentials:** Change panel username and password used for login access.
+- **User-Agent configuration:** Set a custom User-Agent string used for all upstream API requests and downloads (hover tooltip warns non-technical users to leave it alone).
+- **Default RAM allocation:** Configure default min/max RAM for new servers (saves time when creating many servers).
+- **Default JVM flags preset:** Pre-select a JVM flags preset (None, Aikar's Flags, Velocity & Waterfall) for new servers.
+- **Status polling interval:** Configure how often the panel polls for server status updates (1-30 seconds).
+- **Persistent settings:** All settings are stored in `/AdPanel/data/settings.json` and survive restarts.
 
 ### Notifications
-- **Toast notifications** â€” Contextual success, error, warning, and info messages with circular close buttons.
-- **Color-matched close buttons** â€” Close buttons inside each toast match the notification type color (green for success, red for error, yellow for warning, blue for info).
+- **Toast notifications:** Contextual success, error, warning, and info messages with circular close buttons.
+- **Color-matched close buttons:** Close buttons inside each toast match the notification type color (green for success, red for error, yellow for warning, blue for info).
 
 ### Security
-- **Non-root execution** â€” The panel and all Minecraft servers run as a dedicated `mcpanel` user, not root (this is really important).
-- **Privilege drop** â€” Entrypoint uses `gosu` to fix volume ownership then drops to unprivileged user.
-- **Session auth middleware** â€” API routes require a valid authenticated session.
-- **Password hashing** â€” Login passwords are stored hashed in settings (not plaintext).
-- **Path traversal protection** â€” File browser is sandboxed to each server's directory.
-- **Filename sanitization** â€” Plugin and server names are sanitized to prevent directory escape.
+- **Non-root execution:** The panel and all Minecraft servers run as a dedicated `mcpanel` user, not root (this is really important).
+- **Privilege drop:** Entrypoint uses `gosu` to fix volume ownership then drops to unprivileged user.
+- **Session auth middleware:** API routes require a valid authenticated session.
+- **Password hashing:** Login passwords are stored hashed in settings (not plaintext).
+- **Path traversal protection:** File browser is sandboxed to each server's directory.
+- **Filename sanitization:** Plugin and server names are sanitized to prevent directory escape.
 
 ### CasaOS Integration (or any docker based management app really)
-- **App icon** â€” Displays in the CasaOS dashboard with custom icon.
-- **Docker labels** â€” Configured for CasaOS app discovery (name, icon, port, scheme).
-- **AppData volumes** â€” Follows the CasaOS convention at `/DATA/AppData/minecraft-adpanel/`
-- **One-click access** â€” Open the panel directly from CasaOS UI.
+- **App icon:** Displays in the CasaOS dashboard with custom icon.
+- **Docker labels:** Configured for CasaOS app discovery (name, icon, port, scheme).
+- **AppData volumes:** Follows the CasaOS convention at `/DATA/AppData/minecraft-adpanel/`
+- **One-click access:** Open the panel directly from CasaOS UI.
 
 ## Architecture
 
@@ -151,13 +151,13 @@ Everything else â€” backups, plugins, file editing, monitoring â€” is 
 +-----------------------------------------+
 ```
 
-- The Go backend starts on port **4010** and serves both the API and the compiled React frontend
-- Each Minecraft server runs as a child process managed via `os/exec` with stdin/stdout piping
-- Console output is streamed to clients over WebSocket in real time with ANSI color support
-- Server metadata is persisted in a JSON file (`/AdPanel/data/servers.json`)
-- Backup scheduler runs as a background goroutine, checking every minute for due backups
-- A player info poller periodically queries TPS, player list, ping, and dimension data via server commands
-- Plugin/mod operations automatically target the correct directory (`plugins/` or `mods/`) based on server type
+- The Go backend starts on port **4010** and serves both the API and the compiled React frontend.
+- Each Minecraft server runs as a child process managed via `os/exec` with stdin/stdout piping.
+- Console output is streamed to clients over WebSocket in real time with ANSI color support.
+- Server metadata is persisted in a JSON file (`/AdPanel/data/servers.json`).
+- Backup scheduler runs as a background goroutine, checking every minute for due backups.
+- A player info poller periodically queries TPS, player list, ping, and dimension data via server commands.
+- Plugin/mod operations automatically target the correct directory (`plugins/` or `mods/`) based on server type.
 
 ### Directory Structure
 
@@ -194,7 +194,7 @@ Default login credentials on first run:
 - **Username:** `mcpanel`
 - **Password:** `mcpanel`
 
-On first startup with default credentials, the backend also prints them in container logs so they can be viewed from CasaOS/Docker logs.
+On first startup with default credentials, the backend also prints them in container logs so they can be viewed from Docker logs.
 
 Docker uses **host networking** by default so Minecraft server ports (25565, etc.) are accessible directly. Persistent data is stored in three volumes:
 
@@ -247,11 +247,11 @@ Your server data, configuration, and backups are preserved in the mounted volume
 ### Manual Setup
 
 **Requirements:**
-- Linux (the backend uses Linux-specific tools like `tar` for backups)
-- Go 1.22+
-- Node.js 20+
-- Java 17+ (21 recommended)
-- git (required for Spigot BuildTools)
+- Linux (the backend uses Linux-specific tools like `tar` for backups).
+- Go 1.22+.
+- Node.js 20+.
+- Java 17+ (21 recommended).
+- git (required for Spigot BuildTools).
 
 **Build the frontend:**
 
@@ -408,24 +408,24 @@ All endpoints are under `/api`. The panel web UI is served at `/`.
 ## Tech Stack
 
 **Backend:**
-- Go 1.22+ with `net/http` (ServeMux pattern matching)
-- gorilla/websocket for real-time console
-- gopsutil for system metrics
-- google/uuid for server IDs
+- Go 1.22+ with `net/http` (ServeMux pattern matching).
+- gorilla/websocket for real-time console.
+- gopsutil for system metrics.
+- google/uuid for server IDs.
 
 **Frontend:**
-- React 18 + TypeScript
-- Vite 6 (build tool)
-- Tailwind CSS 4
-- shadcn/ui (Radix primitives)
-- Lucide React (icons)
-- Framer Motion (animations)
-- Recharts (charts)
-- Sonner (toast notifications)
+- React 18 + TypeScript.
+- Vite 6 (build tool).
+- Tailwind CSS 4.
+- shadcn/ui (Radix primitives).
+- Lucide React (icons).
+- Framer Motion (animations).
+- Recharts (charts).
+- Sonner (toast notifications).
 
 **Runtime:**
-- Java 21 (Eclipse Temurin JRE)
-- Docker multi-stage build (Node > Go > Java)
+- Java 21 (Eclipse Temurin JRE).
+- Docker multi-stage build (Node > Go > Java).
 
 ## License
 
