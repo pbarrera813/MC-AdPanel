@@ -59,6 +59,7 @@ Everything else: backups, plugins, file editing, monitoring â€” is right th
 - **Multi-select:** Click rows to select plugins/mods; dynamic action button adapts: "Check for updates" when nothing is selected, "Update selected" when some are selected, "Update all" when all are selected.
 - **Enable / Disable:** Toggle plugins/mods without deleting (`.jar` / `.jar.disabled` rename).
 - **Upload:** Drag-and-drop `.jar` upload with multi-file support.
+- **Duplicate-safe uploads:** If a plugin/mod file name already exists, the new upload is preserved with an auto-suffix like `name(1).jar` instead of overwriting.
 - **Delete:** Remove with confirmation.
 - **Update checking:** Check for outdated plugins/mods via Modrinth and Spiget APIs; update individually or batch update.
 - **Optional source URL per file:** Add and edit a source link for better update matching (Spigot/Modrinth for plugins, Modrinth/CurseForge for mods).
@@ -84,8 +85,11 @@ Everything else: backups, plugins, file editing, monitoring â€” is right th
 ### File Browser
 - **Directory navigation:** Browse server files with breadcrumb path.
 - **File editor:** Edit text-based config files (`.properties`, `.yml`, `.json`, `.toml`, `.cfg`, `.xml`, etc.) directly in the browser.
+- **Editor search:** Inline search box in the editor toolbar with next/previous navigation and highlighted matches.
+- **Line numbers:** Text editor view shows line numbers for easier config editing and troubleshooting.
 - **Rename files and folders:** Select a single file or folder and click the pencil icon to rename it.
 - **Upload files:** Drag-and-drop or click to upload; newly uploaded files are highlighted with a "New!" indicator until you navigate away.
+- **Duplicate-safe file uploads:** If a file with the same name already exists, uploads are kept as `name(1).ext`, `name(2).ext`, etc. (no silent overwrite).
 - **Download files:** Download single files directly or multiple files as a zip archive.
 - **Create folders:** New directory creation.
 - **Multi-select:** Select multiple files for batch download or deletion.
