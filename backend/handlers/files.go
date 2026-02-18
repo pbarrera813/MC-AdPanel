@@ -114,13 +114,18 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	if subPath == "." {
 		targetPath = header.Filename
 	}
+	targetPath, err = h.mgr.ResolveUploadSubPath(id, targetPath)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	if err := h.mgr.WriteFileContent(id, targetPath, data); err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]string{"status": "uploaded", "name": header.Filename})
+	respondJSON(w, http.StatusOK, map[string]string{"status": "uploaded", "name": filepath.Base(targetPath)})
 }
 
 // Delete handles DELETE /api/servers/{id}/files?path=file.txt

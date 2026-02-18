@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Server, FileEntry } from '../../context/ServerContext';
-import { Folder, ChevronRight, FileText, Upload, Plus, Trash2, Home, Loader2, ArrowLeft, Download, CheckSquare, Square, Check, Pencil } from 'lucide-react';
+import { Folder, ChevronRight, FileText, Upload, Plus, Trash2, Home, Loader2, ArrowLeft, Download, CheckSquare, Square, Check, Pencil, Search } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import clsx from 'clsx';
 import { toast } from 'sonner';
@@ -24,6 +24,8 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
   const [newFolderName, setNewFolderName] = useState('New Folder');
   const [isUploading, setIsUploading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [editorSearch, setEditorSearch] = useState('');
+  const [activeSearchMatch, setActiveSearchMatch] = useState(0);
   const [downloading, setDownloading] = useState(false);
   const [newlyUploaded, setNewlyUploaded] = useState<Set<string>>(new Set());
   const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
@@ -31,6 +33,9 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
   const [newName, setNewName] = useState('');
   const [renaming, setRenaming] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const editorTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const lineNumbersRef = useRef<HTMLDivElement>(null);
+  const highlightRef = useRef<HTMLPreElement>(null);
 
   const hasSelection = selectedNames.size > 0;
 
@@ -106,10 +111,81 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
       const content = await res.text();
       setEditingFile({ path: filePath, content });
       setEditContent(content);
+      setEditorSearch('');
+      setActiveSearchMatch(0);
     } catch (err) {
       toast.error('Failed to open file');
     }
   };
+
+  const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  const searchMatches = React.useMemo(() => {
+    const term = editorSearch.trim();
+    if (!term) return [] as number[];
+    const re = new RegExp(escapeRegExp(term), 'gi');
+    const indices: number[] = [];
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(editContent)) !== null) {
+      indices.push(match.index);
+      if (match[0].length === 0) re.lastIndex += 1;
+    }
+    return indices;
+  }, [editContent, editorSearch]);
+
+  useEffect(() => {
+    setActiveSearchMatch(0);
+  }, [editorSearch, editContent]);
+
+  const jumpToSearchMatch = (direction: 'next' | 'prev') => {
+    const term = editorSearch.trim();
+    const textarea = editorTextareaRef.current;
+    if (!term || !textarea || searchMatches.length === 0) return;
+    const nextMatch = direction === 'next'
+      ? (activeSearchMatch + 1) % searchMatches.length
+      : (activeSearchMatch - 1 + searchMatches.length) % searchMatches.length;
+    const targetIndex = searchMatches[nextMatch];
+    setActiveSearchMatch(nextMatch);
+
+    textarea.focus();
+    textarea.setSelectionRange(targetIndex, targetIndex + term.length);
+  };
+
+  const lineCount = React.useMemo(() => Math.max(1, editContent.split('\n').length), [editContent]);
+  const highlightedContent = React.useMemo(() => {
+    const term = editorSearch.trim();
+    if (!term || searchMatches.length === 0) {
+      return editContent || ' ';
+    }
+
+    const parts: React.ReactNode[] = [];
+    let lastIndex = 0;
+    for (let i = 0; i < searchMatches.length; i += 1) {
+      const start = searchMatches[i];
+      const end = start + term.length;
+      if (start > lastIndex) {
+        parts.push(
+          <span key={`text-${start}`}>{editContent.slice(lastIndex, start)}</span>
+        );
+      }
+      parts.push(
+        <span
+          key={`match-${start}`}
+          className={clsx(
+            'rounded px-0.5',
+            i === activeSearchMatch ? 'bg-[#E5B80B] text-black' : 'bg-[#E5B80B]/50 text-[#111]'
+          )}
+        >
+          {editContent.slice(start, end)}
+        </span>
+      );
+      lastIndex = end;
+    }
+    if (lastIndex < editContent.length) {
+      parts.push(<span key={`text-tail`}>{editContent.slice(lastIndex)}</span>);
+    }
+    return parts;
+  }, [editContent, editorSearch, searchMatches, activeSearchMatch]);
 
   const handleSaveFile = async () => {
     if (!editingFile) return;
@@ -439,6 +515,41 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
                 <span className="font-mono text-white flex items-center gap-2 truncate">
                   <FileText size={16} /> {editingFile.path}
                 </span>
+                <div className="flex items-center gap-2 mx-4">
+                  <div className="relative">
+                    <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
+                    <input
+                      type="text"
+                      value={editorSearch}
+                      onChange={(e) => setEditorSearch(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          if (searchMatches.length > 0) {
+                            jumpToSearchMatch(e.shiftKey ? 'prev' : 'next');
+                          }
+                        }
+                      }}
+                      placeholder="Find exact word"
+                      className="w-56 bg-[#1a1a1a] border border-[#3a3a3a] rounded pl-7 pr-2 py-1 text-xs text-white focus:outline-none focus:border-[#E5B80B]"
+                    />
+                  </div>
+                  <span className="text-[11px] text-gray-500 w-14 text-right">{searchMatches.length} found</span>
+                  <button
+                    onClick={() => jumpToSearchMatch('prev')}
+                    className="px-2 py-1 text-xs bg-[#333] text-gray-300 rounded hover:bg-[#444]"
+                    disabled={searchMatches.length === 0}
+                  >
+                    Prev
+                  </button>
+                  <button
+                    onClick={() => jumpToSearchMatch('next')}
+                    className="px-2 py-1 text-xs bg-[#333] text-gray-300 rounded hover:bg-[#444]"
+                    disabled={searchMatches.length === 0}
+                  >
+                    Next
+                  </button>
+                </div>
                 <div className="flex gap-2">
                   <button
                     onClick={handleSaveFile}
@@ -455,12 +566,41 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
                   </button>
                 </div>
               </div>
-              <div className="flex-1 p-4 overflow-auto">
-                <textarea
-                  className="w-full h-full bg-transparent text-gray-300 font-mono text-sm resize-none focus:outline-none"
-                  value={editContent}
-                  onChange={(e) => setEditContent(e.target.value)}
-                />
+              <div className="flex-1 p-4 overflow-hidden">
+                <div className="h-full border border-[#3a3a3a] rounded overflow-hidden flex">
+                  <div
+                    ref={lineNumbersRef}
+                    className="w-12 bg-transparent border-r border-[#3a3a3a]/40 text-[#E5B80B]/85 text-xs font-mono leading-6 py-2 px-2 text-right select-none overflow-hidden"
+                  >
+                    {Array.from({ length: lineCount }, (_, i) => (
+                      <div key={i}>{i + 1}</div>
+                    ))}
+                  </div>
+                  <div className="relative w-full h-full overflow-hidden">
+                    <pre
+                      ref={highlightRef}
+                      aria-hidden="true"
+                      className="absolute inset-0 p-2 m-0 text-sm leading-6 font-mono whitespace-pre-wrap break-words text-gray-300 pointer-events-none overflow-hidden"
+                    >
+                      {highlightedContent}
+                    </pre>
+                    <textarea
+                      ref={editorTextareaRef}
+                      className="absolute inset-0 w-full h-full bg-transparent text-transparent caret-[#E5B80B] selection:bg-[#E5B80B]/35 font-mono text-sm leading-6 resize-none focus:outline-none p-2 overflow-auto"
+                      value={editContent}
+                      onChange={(e) => setEditContent(e.target.value)}
+                      onScroll={(e) => {
+                        if (lineNumbersRef.current) {
+                          lineNumbersRef.current.scrollTop = e.currentTarget.scrollTop;
+                        }
+                        if (highlightRef.current) {
+                          highlightRef.current.scrollTop = e.currentTarget.scrollTop;
+                          highlightRef.current.scrollLeft = e.currentTarget.scrollLeft;
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
               </div>
             </div>
           </motion.div>

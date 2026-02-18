@@ -1577,6 +1577,64 @@ func (m *Manager) GetFilePath(id, subPath string) (string, error) {
 	return SafePath(cfg.Dir, subPath)
 }
 
+func uniqueFileNameInDir(dirPath, fileName string) (string, error) {
+	name := filepath.Base(strings.TrimSpace(fileName))
+	if name == "" || name == "." || name == string(os.PathSeparator) {
+		return "", fmt.Errorf("invalid file name")
+	}
+
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	if base == "" {
+		base = name
+		ext = ""
+	}
+
+	candidate := name
+	for i := 1; ; i++ {
+		candidatePath := filepath.Join(dirPath, candidate)
+		if _, err := os.Stat(candidatePath); err != nil {
+			if os.IsNotExist(err) {
+				return candidate, nil
+			}
+			return "", err
+		}
+		candidate = fmt.Sprintf("%s(%d)%s", base, i, ext)
+	}
+}
+
+// ResolveUploadSubPath returns a safe, non-conflicting path for an uploaded file.
+func (m *Manager) ResolveUploadSubPath(id, subPath string) (string, error) {
+	m.mu.RLock()
+	cfg, ok := m.configs[id]
+	m.mu.RUnlock()
+	if !ok {
+		return "", fmt.Errorf("server %s not found", id)
+	}
+
+	cleaned := filepath.Clean(subPath)
+	dirSub := filepath.Dir(cleaned)
+	fileName := filepath.Base(cleaned)
+
+	dirPath, err := SafePath(cfg.Dir, dirSub)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dirPath, 0755); err != nil {
+		return "", err
+	}
+
+	uniqueName, err := uniqueFileNameInDir(dirPath, fileName)
+	if err != nil {
+		return "", err
+	}
+
+	if dirSub == "." {
+		return uniqueName, nil
+	}
+	return filepath.ToSlash(filepath.Join(dirSub, uniqueName)), nil
+}
+
 // ============================================================
 // Plugin Methods
 // ============================================================
@@ -1704,24 +1762,32 @@ func (m *Manager) ListPlugins(id string) ([]PluginInfo, error) {
 	return plugins, nil
 }
 
-// UploadPlugin saves a .jar file to the server's plugins directory
-func (m *Manager) UploadPlugin(id, fileName string, data []byte) error {
+// UploadPlugin saves a .jar file to the server's plugins/mods directory.
+// If a file with the same name exists, it preserves the old file and appends (n) to the new one.
+func (m *Manager) UploadPlugin(id, fileName string, data []byte) (string, error) {
 	m.mu.RLock()
 	cfg, ok := m.configs[id]
 	m.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("server %s not found", id)
+		return "", fmt.Errorf("server %s not found", id)
 	}
 
 	if !strings.HasSuffix(strings.ToLower(fileName), ".jar") {
-		return fmt.Errorf("only .jar files are allowed")
+		return "", fmt.Errorf("only .jar files are allowed")
 	}
 
 	pDir := extensionsDir(cfg)
 	os.MkdirAll(pDir, 0755)
 
-	pluginPath := filepath.Join(pDir, filepath.Base(fileName))
-	return os.WriteFile(pluginPath, data, 0644)
+	uniqueName, err := uniqueFileNameInDir(pDir, fileName)
+	if err != nil {
+		return "", err
+	}
+	pluginPath := filepath.Join(pDir, uniqueName)
+	if err := os.WriteFile(pluginPath, data, 0644); err != nil {
+		return "", err
+	}
+	return uniqueName, nil
 }
 
 // DeletePlugin removes a plugin jar from the server's plugins directory

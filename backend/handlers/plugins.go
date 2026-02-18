@@ -51,12 +51,13 @@ func (h *PluginHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.mgr.UploadPlugin(id, header.Filename, data); err != nil {
+	savedName, err := h.mgr.UploadPlugin(id, header.Filename, data)
+	if err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]string{"status": "uploaded", "name": header.Filename})
+	respondJSON(w, http.StatusOK, map[string]string{"status": "uploaded", "name": savedName})
 }
 
 // Delete handles DELETE /api/servers/{id}/plugins/{name}
