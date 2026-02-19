@@ -157,7 +157,7 @@ var (
 	mcColorPattern      = regexp.MustCompile(`§[0-9a-fk-or]`)
 	nameSanitize        = regexp.MustCompile(`[^a-zA-Z0-9_\-.]`)
 	tpsPattern          = regexp.MustCompile(`TPS from last 1m, 5m, 15m: \*?([0-9.]+)`)
-	forgeTpsPattern     = regexp.MustCompile(`(?i)overall:.*TPS:\s*([0-9.]+)`)
+	forgeTpsPattern     = regexp.MustCompile(`(?i)overall:\s*(?:tps[:=]\s*)?([0-9.]+)\s*tps\b|overall:.*\btps[:=]\s*([0-9.]+)`)
 	simpleTpsPattern    = regexp.MustCompile(`(?i)\bTPS[:=]\s*([0-9.]+)`)
 	dimensionPattern    = regexp.MustCompile(`(\w+) has the following entity data: "minecraft:(\w+)"`)
 	listPattern         = regexp.MustCompile(`There are (\d+) of a max of (\d+) players online:\s*(.*)`)
@@ -227,8 +227,10 @@ func tpsCommandForType(serverType string) (string, bool) {
 	switch strings.ToLower(serverType) {
 	case "paper", "spigot", "purpur", "folia":
 		return "tps", true
-	case "forge", "neoforge":
+	case "forge":
 		return "forge tps", true
+	case "neoforge":
+		return "neoforge tps", true
 	case "fabric":
 		return "fabric tps", true
 	default:
@@ -810,8 +812,12 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 				suppressLine = true
 			}
 		}
-		if matches := forgeTpsPattern.FindStringSubmatch(clean); len(matches) >= 2 {
-			if tpsVal, err := strconv.ParseFloat(matches[1], 64); err == nil {
+		if matches := forgeTpsPattern.FindStringSubmatch(clean); len(matches) >= 3 {
+			tpsText := matches[1]
+			if tpsText == "" {
+				tpsText = matches[2]
+			}
+			if tpsVal, err := strconv.ParseFloat(tpsText, 64); err == nil {
 				rs.tps = tpsVal
 			}
 			if internalCmdRecent {
