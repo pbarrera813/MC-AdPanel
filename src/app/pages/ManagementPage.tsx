@@ -20,6 +20,7 @@ export const ManagementPage = () => {
   const { activeServer, startServer, stopServer, refreshServers } = useServer();
   const [activeTab, setActiveTab] = useState<Tab>('console');
   const [isLargeScreen, setIsLargeScreen] = useState(true);
+  const playersUnsupportedForType = activeServer?.type === 'Velocity';
 
   // Modals State
   const [isRestartModalOpen, setIsRestartModalOpen] = useState(false);
@@ -56,6 +57,12 @@ export const ManagementPage = () => {
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  useEffect(() => {
+    if (playersUnsupportedForType && activeTab === 'players') {
+      setActiveTab('console');
+    }
+  }, [playersUnsupportedForType, activeTab]);
 
   useEscapeKey(isRestartModalOpen, () => setIsRestartModalOpen(false));
   useEscapeKey(isSafeModeModalOpen, () => setIsSafeModeModalOpen(false));
@@ -273,7 +280,15 @@ export const ManagementPage = () => {
       <div className="bg-[#202020] border-b border-[#3a3a3a] px-4 md:px-6 pt-2 flex gap-1 flex-wrap">
         <TabButton id="console" label="Console" icon={Terminal} active={activeTab} onClick={setActiveTab} />
         <TabButton id="browse" label="File Browser" icon={Folder} active={activeTab} onClick={setActiveTab} />
-        <TabButton id="players" label="Players" icon={Users} active={activeTab} onClick={setActiveTab} />
+        <TabButton
+          id="players"
+          label="Players"
+          icon={Users}
+          active={activeTab}
+          onClick={setActiveTab}
+          disabled={playersUnsupportedForType}
+          disabledReason={playersUnsupportedForType ? 'Not supported on this server type' : ''}
+        />
       </div>
 
       {/* Content Area */}
@@ -664,14 +679,17 @@ export const ManagementPage = () => {
   );
 };
 
-const TabButton = ({ id, label, icon: Icon, active, onClick }: { id: Tab, label: string, icon: any, active: Tab, onClick: (t: Tab) => void }) => (
+const TabButton = ({ id, label, icon: Icon, active, onClick, disabled, disabledReason }: { id: Tab, label: string, icon: any, active: Tab, onClick: (t: Tab) => void, disabled?: boolean, disabledReason?: string }) => (
   <button
-    onClick={() => onClick(id)}
+    onClick={() => !disabled && onClick(id)}
+    disabled={disabled}
+    title={disabledReason || undefined}
     className={clsx(
       "flex items-center gap-2 px-4 py-3 border-t-2 transition-colors text-sm font-medium outline-none",
       active === id 
         ? "border-[#E5B80B] bg-[#2C2C2B] text-white" 
-        : "border-transparent text-gray-500 hover:text-gray-300 hover:bg-[#252525]"
+        : "border-transparent text-gray-500 hover:text-gray-300 hover:bg-[#252525]",
+      disabled && "opacity-50 cursor-not-allowed hover:text-gray-500 hover:bg-transparent"
     )}
   >
     <Icon size={16} />

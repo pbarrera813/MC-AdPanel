@@ -11,7 +11,7 @@ interface ServersPageProps {
 }
 
 const SERVER_TYPES = [
-  'Vanilla', 'Spigot', 'Paper', 'Folia', 'Purpur', 'Velocity', 'Waterfall', 'Forge', 'Fabric', 'NeoForge'
+  'Vanilla', 'Spigot', 'Paper', 'Folia', 'Purpur', 'Velocity', 'Forge', 'Fabric', 'NeoForge'
 ] as const;
 
 interface VersionInfo {
@@ -38,7 +38,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
-    flags: 'none' as 'none' | 'aikars' | 'velocity',
+    flags: 'none' as 'none' | 'aikars' | 'velocity' | 'modded',
     alwaysPreTouch: false,
     type: '',
     version: '',
@@ -410,9 +410,10 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
                 <label className="block text-sm font-medium text-gray-400 mb-2">JVM Flags</label>
                 <div className="flex flex-wrap gap-3">
                   {([
-                    { value: 'none', label: 'None', desc: 'Default JVM flags' },
-                    { value: 'aikars', label: "Aikar's Flags", desc: 'Optimized GC for game servers' },
-                    { value: 'velocity', label: 'Velocity & Waterfall', desc: 'Optimized for proxy servers' },
+                    { value: 'none', label: 'None', desc: 'Default JVM flags.' },
+                    { value: 'aikars', label: "Aikar's Flags", desc: 'Optimized GC for game servers.' },
+                    { value: 'velocity', label: 'Velocity Proxy', desc: 'Optimized for proxy servers.' },
+                    { value: 'modded', label: 'Modded', desc: 'Recommended for modded servers.' },
                   ] as const).map(opt => (
                     <button
                       key={opt.value}
@@ -820,11 +821,12 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
                     </button>
                   </div>
 
-                  <div className="flex flex-col gap-2 flex-1">
+                  <div className="flex flex-col gap-2 flex-1 min-h-0 overflow-y-auto pr-1">
                     {([
-                      { value: 'none', label: 'None', desc: 'Default JVM flags' },
-                      { value: 'aikars', label: "Aikar's Flags", desc: 'Optimized GC for game servers' },
-                      { value: 'velocity', label: 'Velocity & Waterfall', desc: 'Optimized for proxy servers' },
+                      { value: 'none', label: 'None', desc: 'Default JVM flags.' },
+                      { value: 'aikars', label: "Aikar's Flags", desc: 'Optimized GC for game servers.' },
+                      { value: 'velocity', label: 'Velocity Proxy', desc: 'Optimized for proxy servers.' },
+                      { value: 'modded', label: 'Modded', desc: 'Recommended for modded servers.' },
                     ] as const).map(opt => (
                       <button
                         key={opt.value}

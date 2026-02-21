@@ -24,7 +24,7 @@ Everything else: backups, plugins, file editing, monitoring â€” is right th
 
 ### Server Management
 - **Multi-server management:** Run multiple Minecraft servers simultaneously, each with its own port, type, and version.
-- **10 server types supported:** Vanilla, Paper, Spigot, Purpur, Folia, Fabric, Forge, NeoForge, Velocity, Waterfall.
+- **9 server types supported:** Vanilla, Paper, Spigot, Purpur, Folia, Fabric, Forge, NeoForge, Velocity.
 - **Automatic jar download:** Fetches the correct server jar from upstream APIs when you create a server (no manual downloads).
 - **Dynamic version fetching:** Versions are fetched live from upstream APIs with a 15-minute in-memory cache.
 - **In-place server version upgrades:** Update server version from the Servers page (stopped servers only) by selecting a newer available version.
@@ -37,7 +37,7 @@ Everything else: backups, plugins, file editing, monitoring â€” is right th
 - **Safe mode:** Start a server with plugins/mods disabled (renames directories, restores them on stop).
 
 ### JVM Flags
-- **Preset selection:** Choose from Aikar's Flags (optimized GC for game servers), Velocity & Waterfall (optimized for proxies), or no flags if you are just built like that you know.
+- **Preset selection:** Choose from Aikar's Flags (optimized GC for game servers), Velocity Proxy (optimized for proxies), or no flags if you are just built like that you know.
 - **AlwaysPreTouch toggle:** Optionally enable `-XX:+AlwaysPreTouch` (pre-allocates memory at startup, useful if you want to remember how much ram the servers are using.)
 - **Configurable per-server:** Set flags at creation time or change them later from the server card
 - **Forge/NeoForge support:** Flags are written to `user_jvm_args.txt` for servers using `run.sh`
@@ -52,7 +52,7 @@ Everything else: backups, plugins, file editing, monitoring â€” is right th
 - **Crash reports:** View, copy, download, and delete crash report files with multi-select for batch deletion.
 
 ### Plugin & Mod Management
-- **Smart directory detection:** The backend automatically reads from the correct directory: `plugins/` for plugin-based servers (Paper, Spigot, Purpur, Folia, Velocity, Waterfall) and `mods/` for modded servers (Forge, Fabric, NeoForge).
+- **Smart directory detection:** The backend automatically reads from the correct directory: `plugins/` for plugin-based servers (Paper, Spigot, Purpur, Folia, Velocity) and `mods/` for modded servers (Forge, Fabric, NeoForge).
 - **Dynamic labeling:** The interface automatically says "Plugins" for plugin-based servers and "Mods" for modded servers throughout the entire page.
 - **Vanilla behavior:** Plugins / Mods section is disabled for Vanilla servers with the message `Not supported on this server type`.
 - **Plugin/mod list:** View all installed plugins or mods with name, version, file size, and enabled/disabled status.
@@ -114,7 +114,7 @@ Everything else: backups, plugins, file editing, monitoring â€” is right th
 - **Panel credentials:** Change panel username and password used for login access.
 - **User-Agent configuration:** Set a custom User-Agent string used for all upstream API requests and downloads (hover tooltip warns non-technical users to leave it alone).
 - **Default RAM allocation:** Configure default min/max RAM for new servers (saves time when creating many servers).
-- **Default JVM flags preset:** Pre-select a JVM flags preset (None, Aikar's Flags, Velocity & Waterfall) for new servers.
+- **Default JVM flags preset:** Pre-select a JVM flags preset (None, Aikar's Flags, Velocity Proxy) for new servers.
 - **Status polling interval:** Configure how often the panel polls for server status updates (1-30 seconds).
 - **Persistent settings:** All settings are stored in `/AdPanel/data/settings.json` and survive restarts.
 
@@ -292,7 +292,6 @@ Open `http://localhost:4010` in your browser.
 | **Paper** | [PaperMC API](https://api.papermc.io) | Direct jar download |
 | **Folia** | [PaperMC API](https://api.papermc.io) | Direct jar download |
 | **Velocity** | [PaperMC API](https://api.papermc.io) | Direct jar download (proxy) |
-| **Waterfall** | [PaperMC API](https://api.papermc.io) | Direct jar download (proxy) |
 | **Purpur** | [Purpur API](https://api.purpurmc.org) | Direct jar download |
 | **Fabric** | [Fabric Meta](https://meta.fabricmc.net) | Server jar from loader + installer endpoint |
 | **Forge** | [MinecraftForge](https://files.minecraftforge.net) | Installer jar + `--installServer` |

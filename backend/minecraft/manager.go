@@ -214,6 +214,15 @@ func isModdedType(serverType string) bool {
 	}
 }
 
+func isProxyType(serverType string) bool {
+	switch strings.ToLower(serverType) {
+	case "velocity":
+		return true
+	default:
+		return false
+	}
+}
+
 func listCommandForType(serverType string) string {
 	switch strings.ToLower(serverType) {
 	case "paper", "spigot", "purpur", "folia":
@@ -570,13 +579,45 @@ func buildJVMFlags(flags string, alwaysPreTouch bool) []string {
 			"-XX:+ParallelRefProcEnabled",
 			"-XX:MaxInlineLevel=15",
 		}
+	case "modded":
+		args = []string{
+			"-XX:+UseG1GC",
+			"-XX:+UnlockExperimentalVMOptions",
+			"-XX:MaxGCPauseMillis=50",
+			"-XX:+DisableExplicitGC",
+			"-XX:G1NewSizePercent=30",
+			"-XX:G1MaxNewSizePercent=40",
+			"-XX:G1HeapRegionSize=16M",
+			"-XX:InitiatingHeapOccupancyPercent=15",
+			"-XX:G1MixedGCLiveThresholdPercent=50",
+			"-XX:+PerfDisableSharedMem",
+		}
+	case "none", "":
+		args = []string{
+			"--add-modules=jdk.incubator.vector",
+		}
 	default:
-		// "none" or empty — no extra flags
+		// Unknown preset — apply baseline compatibility flag.
+		args = []string{
+			"--add-modules=jdk.incubator.vector",
+		}
 	}
 	if alwaysPreTouch && len(args) > 0 {
 		args = append(args, "-XX:+AlwaysPreTouch")
 	}
 	return args
+}
+
+func writeManagedUserJVMArgs(path string, extraFlags []string) error {
+	content := "# JVM flags managed by Admin Panel\n"
+	for _, f := range extraFlags {
+		content += f + "\n"
+	}
+	existing, err := os.ReadFile(path)
+	if err == nil && string(existing) == content {
+		return nil
+	}
+	return os.WriteFile(path, []byte(content), 0644)
 }
 
 // StartServer starts the Minecraft process for the given server
@@ -603,14 +644,12 @@ func (m *Manager) StartServer(id string) error {
 	// Determine start command
 	var cmd *exec.Cmd
 	if len(cfg.StartCommand) > 0 {
-		// For Forge/NeoForge: write JVM flags to user_jvm_args.txt
-		if extraFlags := buildJVMFlags(cfg.Flags, cfg.AlwaysPreTouch); len(extraFlags) > 0 {
-			jvmArgsPath := filepath.Join(cfg.Dir, "user_jvm_args.txt")
-			content := "# JVM flags managed by Admin Panel\n"
-			for _, f := range extraFlags {
-				content += f + "\n"
-			}
-			os.WriteFile(jvmArgsPath, []byte(content), 0644)
+		// For StartCommand-based servers (e.g. Forge/NeoForge), keep user_jvm_args.txt
+		// in sync with selected preset while avoiding unnecessary rewrites.
+		extraFlags := buildJVMFlags(cfg.Flags, cfg.AlwaysPreTouch)
+		jvmArgsPath := filepath.Join(cfg.Dir, "user_jvm_args.txt")
+		if err := writeManagedUserJVMArgs(jvmArgsPath, extraFlags); err != nil {
+			log.Printf("[%s] Failed to write user_jvm_args.txt: %v", cfg.Name, err)
 		}
 		cmd = exec.Command(cfg.StartCommand[0], cfg.StartCommand[1:]...)
 	} else {
@@ -772,11 +811,14 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 		clean = strings.TrimRight(clean, " \r")
 
 		rs.mu.Lock()
-		if strings.Contains(clean, "Done (") && strings.Contains(clean, "! For help,") {
-			rs.status = "Running"
-			cfg := m.configs[id]
-			if cfg != nil {
-				log.Printf("[%s] Server is now running", cfg.Name)
+		if strings.Contains(clean, "Done (") {
+			isReadyLine := strings.Contains(clean, "! For help,") || strings.Contains(clean, ")!")
+			if isReadyLine {
+				rs.status = "Running"
+				cfg := m.configs[id]
+				if cfg != nil {
+					log.Printf("[%s] Server is now running", cfg.Name)
+				}
 			}
 		}
 
@@ -982,6 +1024,10 @@ func (m *Manager) collectMetrics(id string, rs *runningServer) {
 		serverDir = cfg.Dir
 	}
 	m.mu.RUnlock()
+	if isProxyType(serverType) {
+		// Proxies are not gameplay servers, so list/tps polling is not useful.
+		hasTpsCmd = false
+	}
 	if strings.EqualFold(serverType, "fabric") {
 		hasTpsCmd = hasTpsCmd && hasFabricTps(filepath.Join(serverDir, "mods"))
 	}
@@ -1038,7 +1084,7 @@ func (m *Manager) collectMetrics(id string, rs *runningServer) {
 			// Query player info — only native commands (no plugin dependency)
 			playerInfoTicks++
 			listResyncTicks++
-			if playerInfoTicks >= 15 && status == "Running" {
+			if !isProxyType(serverType) && playerInfoTicks >= 15 && status == "Running" {
 				playerInfoTicks = 0
 
 				rs.mu.RLock()
@@ -1065,7 +1111,7 @@ func (m *Manager) collectMetrics(id string, rs *runningServer) {
 				}
 			}
 
-			if listResyncTicks >= 5 && status == "Running" {
+			if !isProxyType(serverType) && listResyncTicks >= 5 && status == "Running" {
 				listResyncTicks = 0
 				rs.mu.RLock()
 				hasPlayers := len(rs.players) > 0

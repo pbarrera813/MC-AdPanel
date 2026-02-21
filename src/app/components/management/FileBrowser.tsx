@@ -346,12 +346,12 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
   };
 
   const isTextFile = (name: string) =>
-    /\.(txt|properties|json|log|yml|yaml|toml|cfg|conf|ini|xml|csv|md|sh|bat)$/i.test(name);
+    /\.(txt|properties|json|log|yml|yaml|toml|cfg|conf|ini|xml|csv|md|sh|bat|secret)$/i.test(name);
 
   const serverDirName = server.name.replace(/\s+/g, '_');
 
   return (
-    <div className="flex-1 overflow-hidden flex flex-col bg-[#1e1e1d] p-6 relative">
+    <div className="flex-1 overflow-hidden flex flex-col bg-[#1e1e1d] p-3 md:p-6 relative">
       <div className="flex justify-between items-center mb-4">
         {/* Breadcrumb */}
         <div className="flex items-center gap-1 text-sm text-gray-400 font-mono truncate max-w-xl">
@@ -508,69 +508,73 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
-            className="absolute inset-0 z-40 bg-[#1e1e1d]/95 backdrop-blur flex items-center justify-center p-8"
+            className="absolute inset-0 z-40 bg-[#1e1e1d]/95 backdrop-blur flex items-center justify-center p-2 md:p-8"
           >
-            <div className="w-full max-w-4xl h-3/4 bg-[#252524] border border-[#404040] rounded-lg shadow-2xl flex flex-col">
-              <div className="flex justify-between items-center px-4 py-3 border-b border-[#404040] bg-[#2a2a29]">
-                <span className="font-mono text-white flex items-center gap-2 truncate">
+            <div className="w-full max-w-4xl h-[92vh] md:h-3/4 bg-[#252524] border border-[#404040] rounded-lg shadow-2xl flex flex-col">
+              <div className="px-3 md:px-4 py-3 border-b border-[#404040] bg-[#2a2a29]">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <span className="font-mono text-white flex items-center gap-2 truncate min-w-0">
                   <FileText size={16} /> {editingFile.path}
-                </span>
-                <div className="flex items-center gap-2 mx-4">
-                  <div className="relative">
-                    <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
-                    <input
-                      type="text"
-                      value={editorSearch}
-                      onChange={(e) => setEditorSearch(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          if (searchMatches.length > 0) {
-                            jumpToSearchMatch(e.shiftKey ? 'prev' : 'next');
-                          }
-                        }
-                      }}
-                      placeholder="Find exact word"
-                      className="w-56 bg-[#1a1a1a] border border-[#3a3a3a] rounded pl-7 pr-2 py-1 text-xs text-white focus:outline-none focus:border-[#E5B80B]"
-                    />
+                  </span>
+                  <div className="flex flex-wrap items-center gap-2 md:justify-end">
+                    <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                      <div className="relative flex-1 min-w-[180px]">
+                        <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
+                        <input
+                          type="text"
+                          value={editorSearch}
+                          onChange={(e) => setEditorSearch(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              if (searchMatches.length > 0) {
+                                jumpToSearchMatch(e.shiftKey ? 'prev' : 'next');
+                              }
+                            }
+                          }}
+                          placeholder="Find exact word"
+                          className="w-full sm:w-56 bg-[#1a1a1a] border border-[#3a3a3a] rounded pl-7 pr-2 py-1 text-xs text-white focus:outline-none focus:border-[#E5B80B]"
+                        />
+                      </div>
+                      <span className="text-[11px] text-gray-500 min-w-[60px] text-right">{searchMatches.length} found</span>
+                      <button
+                        onClick={() => jumpToSearchMatch('prev')}
+                        className="px-2 py-1 text-xs bg-[#333] text-gray-300 rounded hover:bg-[#444]"
+                        disabled={searchMatches.length === 0}
+                      >
+                        Prev
+                      </button>
+                      <button
+                        onClick={() => jumpToSearchMatch('next')}
+                        className="px-2 py-1 text-xs bg-[#333] text-gray-300 rounded hover:bg-[#444]"
+                        disabled={searchMatches.length === 0}
+                      >
+                        Next
+                      </button>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleSaveFile}
+                        disabled={saving}
+                        className="px-3 py-1 text-xs bg-[#E5B80B] text-black rounded font-bold hover:bg-[#d4a90a] disabled:opacity-50"
+                      >
+                        {saving ? 'Saving...' : 'Save'}
+                      </button>
+                      <button
+                        onClick={() => setEditingFile(null)}
+                        className="px-3 py-1 text-xs bg-[#333] text-gray-300 rounded hover:bg-[#444]"
+                      >
+                        Close
+                      </button>
+                    </div>
                   </div>
-                  <span className="text-[11px] text-gray-500 w-14 text-right">{searchMatches.length} found</span>
-                  <button
-                    onClick={() => jumpToSearchMatch('prev')}
-                    className="px-2 py-1 text-xs bg-[#333] text-gray-300 rounded hover:bg-[#444]"
-                    disabled={searchMatches.length === 0}
-                  >
-                    Prev
-                  </button>
-                  <button
-                    onClick={() => jumpToSearchMatch('next')}
-                    className="px-2 py-1 text-xs bg-[#333] text-gray-300 rounded hover:bg-[#444]"
-                    disabled={searchMatches.length === 0}
-                  >
-                    Next
-                  </button>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleSaveFile}
-                    disabled={saving}
-                    className="px-3 py-1 text-xs bg-[#E5B80B] text-black rounded font-bold hover:bg-[#d4a90a] disabled:opacity-50"
-                  >
-                    {saving ? 'Saving...' : 'Save'}
-                  </button>
-                  <button
-                    onClick={() => setEditingFile(null)}
-                    className="px-3 py-1 text-xs bg-[#333] text-gray-300 rounded hover:bg-[#444]"
-                  >
-                    Close
-                  </button>
                 </div>
               </div>
-              <div className="flex-1 p-4 overflow-hidden">
+              <div className="flex-1 p-2 md:p-4 overflow-hidden">
                 <div className="h-full border border-[#3a3a3a] rounded overflow-hidden flex">
                   <div
                     ref={lineNumbersRef}
-                    className="w-12 bg-transparent border-r border-[#3a3a3a]/40 text-[#E5B80B]/85 text-xs font-mono leading-6 py-2 px-2 text-right select-none overflow-hidden"
+                    className="w-10 md:w-12 bg-transparent border-r border-[#3a3a3a]/40 text-[#E5B80B]/85 text-xs font-mono leading-6 py-2 px-1 md:px-2 text-right select-none overflow-hidden"
                   >
                     {Array.from({ length: lineCount }, (_, i) => (
                       <div key={i}>{i + 1}</div>
@@ -589,6 +593,34 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
                       className="absolute inset-0 w-full h-full bg-transparent text-transparent caret-[#E5B80B] selection:bg-[#E5B80B]/35 font-mono text-sm leading-6 resize-none focus:outline-none p-2 overflow-auto"
                       value={editContent}
                       onChange={(e) => setEditContent(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Tab') return;
+                        e.preventDefault();
+                        const target = e.currentTarget;
+                        const { selectionStart, selectionEnd, value } = target;
+                        const indent = '\t';
+                        if (selectionStart === selectionEnd) {
+                          const next = value.slice(0, selectionStart) + indent + value.slice(selectionEnd);
+                          setEditContent(next);
+                          requestAnimationFrame(() => {
+                            target.selectionStart = selectionStart + indent.length;
+                            target.selectionEnd = selectionStart + indent.length;
+                          });
+                          return;
+                        }
+
+                        const selectedText = value.slice(selectionStart, selectionEnd);
+                        const lineStart = value.lastIndexOf('\n', selectionStart - 1) + 1;
+                        const selectedLines = value.slice(lineStart, selectionEnd);
+                        const indentedLines = selectedLines.replace(/^/gm, indent);
+                        const next = value.slice(0, lineStart) + indentedLines + value.slice(selectionEnd);
+                        setEditContent(next);
+                        const added = indentedLines.length - selectedLines.length;
+                        requestAnimationFrame(() => {
+                          target.selectionStart = selectionStart + indent.length;
+                          target.selectionEnd = selectionEnd + added;
+                        });
+                      }}
                       onScroll={(e) => {
                         if (lineNumbersRef.current) {
                           lineNumbersRef.current.scrollTop = e.currentTarget.scrollTop;

@@ -385,8 +385,6 @@ func loaderTagsForType(serverType string) []string {
 		return []string{"neoforge"}
 	case "velocity":
 		return []string{"velocity"}
-	case "waterfall":
-		return []string{"waterfall", "bungeecord"}
 	default:
 		return nil
 	}

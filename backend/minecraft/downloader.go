@@ -72,16 +72,15 @@ func (vc *versionCache) Set(serverType string, versions []VersionInfo) {
 // ---------------------------------------------------------------------------
 
 var providers = map[string]JarProvider{
-	"vanilla":   &VanillaProvider{},
-	"paper":     &PaperMCProvider{project: "paper"},
-	"folia":     &PaperMCProvider{project: "folia"},
-	"velocity":  &PaperMCProvider{project: "velocity"},
-	"waterfall": &PaperMCProvider{project: "waterfall"},
-	"purpur":    &PurpurProvider{},
-	"fabric":    &FabricProvider{},
-	"forge":     &ForgeProvider{},
-	"neoforge":  &NeoForgeProvider{},
-	"spigot":    &SpigotProvider{},
+	"vanilla":  &VanillaProvider{},
+	"paper":    &PaperMCProvider{project: "paper"},
+	"folia":    &PaperMCProvider{project: "folia"},
+	"velocity": &PaperMCProvider{project: "velocity"},
+	"purpur":   &PurpurProvider{},
+	"fabric":   &FabricProvider{},
+	"forge":    &ForgeProvider{},
+	"neoforge": &NeoForgeProvider{},
+	"spigot":   &SpigotProvider{},
 }
 
 // GetProvider returns the JarProvider for a server type
@@ -178,7 +177,7 @@ func resolveLatest(ctx context.Context, provider JarProvider, version string) (s
 }
 
 // ---------------------------------------------------------------------------
-// PaperMC Provider (Paper, Folia, Velocity, Waterfall)
+// PaperMC Provider (Paper, Folia, Velocity)
 // ---------------------------------------------------------------------------
 
 type PaperMCProvider struct {

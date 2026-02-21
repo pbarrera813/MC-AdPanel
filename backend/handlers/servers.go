@@ -52,6 +52,10 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "Server type is required")
 		return
 	}
+	if _, err := minecraft.GetProvider(req.Type); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if req.Version == "" {
 		req.Version = "Latest"
 	}

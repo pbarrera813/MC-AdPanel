@@ -7,8 +7,8 @@ interface LoginPageProps {
 }
 
 export const LoginPage = ({ onLoginSuccess }: LoginPageProps) => {
-  const [username, setUsername] = useState('mcpanel');
-  const [password, setPassword] = useState('mcpanel');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [visible, setVisible] = useState(false);
 
@@ -59,7 +59,7 @@ export const LoginPage = ({ onLoginSuccess }: LoginPageProps) => {
           <h1 className="text-xl font-bold text-white tracking-wide">Minecraft Admin Panel</h1>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-4" autoComplete="on">
           <div>
             <label className="block text-sm text-gray-300 mb-1.5">User</label>
             <input

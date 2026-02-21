@@ -2,7 +2,7 @@ import React from 'react';
 import { Server, Terminal, Box, Database, FileText, Copy, Layers, Sliders } from 'lucide-react';
 import { useServer } from '../context/ServerContext';
 import clsx from 'clsx';
-import minecraftLogo from '../../assets/4850776a1fc2c6be034672b47470d65273a8949d.png';
+import minecraftLogo from '../../assets/logo.png';
 import { ServerSwitcher } from './ServerSwitcher';
 
 type View = 'servers' | 'management' | 'plugins' | 'backups' | 'logs' | 'cloning' | 'settings';
@@ -63,7 +63,7 @@ export const Sidebar = ({ currentView, setCurrentView, className }: SidebarProps
       </div>
 
       <div className="p-4 border-t border-[#3a3a3a] text-xs text-center text-gray-600">
-        v1.0.0 &copy; Pablo Barrera 2026
+        v1.0.1 &copy; Pablo Barrera 2026
       </div>
     </div>
   );

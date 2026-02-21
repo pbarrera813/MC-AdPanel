@@ -43,6 +43,11 @@ export const PlayerList = ({ server }: PlayerListProps) => {
   }, [server.id]);
 
   useEffect(() => {
+    if (server.type === 'Velocity') {
+      setPlayers([]);
+      setLoading(false);
+      return;
+    }
     if (server.status !== 'Running') {
       setPlayers([]);
       setLoading(false);
@@ -51,7 +56,16 @@ export const PlayerList = ({ server }: PlayerListProps) => {
     fetchPlayers();
     const interval = setInterval(fetchPlayers, 2000);
     return () => clearInterval(interval);
-  }, [server.status, fetchPlayers]);
+  }, [server.type, server.status, fetchPlayers]);
+
+  if (server.type === 'Velocity') {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
+        <UserX size={48} className="opacity-20" />
+        <p>Not supported on this server type.</p>
+      </div>
+    );
+  }
 
   if (server.status !== 'Running') {
     return (

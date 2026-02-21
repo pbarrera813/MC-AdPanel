@@ -184,9 +184,10 @@ export const SystemSettingsPage = () => {
             <label className="block text-sm text-gray-400 mb-3">Default JVM Flags Preset</label>
             <div className="flex flex-wrap gap-3">
               {([
-                { value: 'none', label: 'None', desc: 'Default JVM flags' },
-                { value: 'aikars', label: "Aikar's Flags", desc: 'Optimized GC for game servers' },
-                { value: 'velocity', label: 'Velocity & Waterfall', desc: 'Optimized for proxy servers' },
+                { value: 'none', label: 'None', desc: 'Default JVM flags.' },
+                { value: 'aikars', label: "Aikar's Flags", desc: 'Optimized GC for game servers.' },
+                { value: 'velocity', label: 'Velocity Proxy', desc: 'Optimized for proxy servers.' },
+                { value: 'modded', label: 'Modded', desc: 'Recommended for modded servers.' },
               ] as const).map(opt => (
                 <button
                   key={opt.value}
