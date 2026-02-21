@@ -508,9 +508,9 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
-            className="absolute inset-0 z-40 bg-[#1e1e1d]/95 backdrop-blur flex items-center justify-center p-2 md:p-8"
+            className="absolute inset-0 z-40 bg-[#1e1e1d]/95 backdrop-blur flex items-stretch justify-stretch p-0 md:items-center md:justify-center md:p-8"
           >
-            <div className="w-full max-w-4xl h-[92vh] md:h-3/4 bg-[#252524] border border-[#404040] rounded-lg shadow-2xl flex flex-col">
+            <div className="w-full h-full bg-[#252524] border border-[#404040] rounded-none md:max-w-4xl md:h-3/4 md:rounded-lg shadow-2xl flex flex-col">
               <div className="px-3 md:px-4 py-3 border-b border-[#404040] bg-[#2a2a29]">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <span className="font-mono text-white flex items-center gap-2 truncate min-w-0">
