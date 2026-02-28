@@ -1,376 +1,361 @@
-﻿# Minecraft Admin Panel v1.0
+# Orexa Panel v1.0.1
 
-A self-hosted web panel for managing multiple Minecraft Java servers from a single interface. Create, start, stop, monitor, and configure servers â€” all from your browser, with built-in login authentication.
-
-Built with a **Go** backend and a **React** frontend, the panel runs on any Linux machine with Java and manages real Minecraft server processes directly. Designed for deployment via **Docker** on CasaOS or any Docker-capable host.
+Orexa Panel is a self-hosted web panel for creating, running, and managing multiple Minecraft Java servers from a single interface. It combines a Go backend with a React frontend and is designed to run well on Docker-based hosts such as CasaOS, as well as on standard Linux machines.
 
 ![Go](https://img.shields.io/badge/Go-1.22-00ADD8?logo=go&logoColor=white)
 ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
 ![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)
 
-## Motivation
+## Overview
 
-MC AdPanel was born out of a simple need: managing Minecraft servers shouldn't be complicated. Existing solutions often require extensive configuration, CLI knowledge, or come with bloated feature sets that get in the way of what you actually want to do â€” run a few Minecraft servers for yourself and your friends.
+Orexa Panel focuses on the workflows server admins use most often:
 
-The goal was to build a **plug and play** experience. Install the Docker container, open your browser, and start creating servers. No config files to edit by hand, no terminal commands to memorize, no reverse proxies to set up. Just a clean web interface where you can:
-
-- Pick a server type and version from a dropdown.
-- Click "Create" and the panel downloads everything for you.
-- Hit "Start" and you're playing (Remember to open the appropiate ports on your firewall, some people forget to do that!).
-
-Everything else: backups, plugins, file editing, monitoring â€” is right there in the same interface, designed to stay out of your way until you need it. One container, one port, zero friction.
+- Create Minecraft servers from supported upstream providers.
+- Start, stop, monitor, clone, and delete servers from the browser.
+- Manage files, plugins, mods, backups, crash reports, and players without leaving the panel.
+- Keep the panel lightweight enough for self-hosted environments.
 
 ## Features
 
 ### Server Management
-- **Multi-server management:** Run multiple Minecraft servers simultaneously, each with its own port, type, and version.
-- **9 server types supported:** Vanilla, Paper, Spigot, Purpur, Folia, Fabric, Forge, NeoForge, Velocity.
-- **Automatic jar download:** Fetches the correct server jar from upstream APIs when you create a server (no manual downloads).
-- **Dynamic version fetching:** Versions are fetched live from upstream APIs with a 15-minute in-memory cache.
-- **In-place server version upgrades:** Update server version from the Servers page (stopped servers only) by selecting a newer available version.
-- **Multi-select and batch operations:** Select multiple servers for batch deletion; running servers are blocked from deletion with a clear warning.
-- **Inline rename:** Click on a selected server's name to rename it directly.
-- **Delete server:** Permanently remove a server including all its files and backups, with confirmation safeguard.
-- **Server cloning:** Clone an existing server with options to copy worlds, plugins, and configs; multi-select sources to batch clone with auto-naming and auto-incrementing ports.
-- **Scheduled restarts:** Schedule a server restart after a configurable delay (5m, 30m, 1h, 3h, 6h, or custom time).
-- **Auto-start:** Per-server toggle to automatically start servers when the panel boots.
-- **Safe mode:** Start a server with plugins/mods disabled (renames directories, restores them on stop).
+- Multi-server management with separate ports, types, versions, RAM limits, and JVM presets.
+- Supported server types: Vanilla, Paper, Spigot, Purpur, Folia, Fabric, Forge, NeoForge, and Velocity.
+- Automatic jar or installer download from upstream providers when creating servers.
+- Live version fetching with an in-memory cache.
+- In-place forward version upgrades for stopped servers.
+- Inline rename and batch delete from the Servers page.
+- Server cloning with options to copy worlds, plugins/mods, and configs.
+- Clone port defaults use the closest free port instead of blindly incrementing by one.
+- Scheduled restart support with preset delays and custom times.
+- Auto-start toggle per server.
+- Safe mode startup that temporarily disables plugins or mods and restores them after stop.
 
-### JVM Flags
-- **Preset selection:** Choose from Aikar's Flags (optimized GC for game servers), Velocity Proxy (optimized for proxies), or no flags if you are just built like that you know.
-- **AlwaysPreTouch toggle:** Optionally enable `-XX:+AlwaysPreTouch` (pre-allocates memory at startup, useful if you want to remember how much ram the servers are using.)
-- **Configurable per-server:** Set flags at creation time or change them later from the server card
-- **Forge/NeoForge support:** Flags are written to `user_jvm_args.txt` for servers using `run.sh`
-
-### Monitoring & Console
-- **Real-time console:** WebSocket-based live console with ANSI color rendering and command input.
-- **TPS monitoring:** Live TPS (Ticks Per Second) display with color-coded indicator and progress bar (green >=18, yellow >=15, red <15).
-- **Vanilla TPS behavior:** Vanilla servers show TPS as unsupported (Vanilla has no native `/tps` command).
-- **CPU usage graph:** Live area chart normalized to total system CPU (0-100%).
-- **RAM usage graph:** Real-time memory consumption tracking.
-- **Player tracking:** Online player list parsed from server logs with periodic `list` command verification to clean stale entries.
-- **Crash reports:** View, copy, download, and delete crash report files with multi-select for batch deletion.
-
-### Plugin & Mod Management
-- **Smart directory detection:** The backend automatically reads from the correct directory: `plugins/` for plugin-based servers (Paper, Spigot, Purpur, Folia, Velocity) and `mods/` for modded servers (Forge, Fabric, NeoForge).
-- **Dynamic labeling:** The interface automatically says "Plugins" for plugin-based servers and "Mods" for modded servers throughout the entire page.
-- **Vanilla behavior:** Plugins / Mods section is disabled for Vanilla servers with the message `Not supported on this server type`.
-- **Plugin/mod list:** View all installed plugins or mods with name, version, file size, and enabled/disabled status.
-- **Multi-select:** Click rows to select plugins/mods; dynamic action button adapts: "Check for updates" when nothing is selected, "Update selected" when some are selected, "Update all" when all are selected.
-- **Enable / Disable:** Toggle plugins/mods without deleting (`.jar` / `.jar.disabled` rename).
-- **Upload:** Drag-and-drop `.jar` upload with multi-file support.
-- **Duplicate-safe uploads:** If a plugin/mod file name already exists, the new upload is preserved with an auto-suffix like `name(1).jar` instead of overwriting.
-- **Delete:** Remove with confirmation.
-- **Update checking:** Check for outdated plugins/mods via Modrinth and Spiget APIs; update individually or batch update.
-- **Optional source URL per file:** Add and edit a source link for better update matching (Spigot/Modrinth for plugins, Modrinth/CurseForge for mods).
-- **Source-aware detection:** Update checks prioritize source IDs/URLs when available and fall back to exact-name matching when no source is configured.
-- **Version canonicalization:** Avoids false positives where versions are equal but differently formatted (for example reordered metadata segments).
-- **Stable release preference:** Update selection avoids unstable pre-releases/snapshots/build-only variants when possible.
-- **Safer replacement:** Update flow validates downloaded artifacts and only replaces when the downloaded version is actually newer.
-- **Version status badges:** Each plugin/mod shows its version status: Latest (green), Outdated (yellow), Incompatible (red), or Unknown.
-
-
-### Authentication
-- **Login screen:** Access is gated by a dedicated login page with session-based authentication.
-- **Default credentials:** First boot uses `mcpanel / mcpanel`.
-- **Credential management:** Username/password can be changed in **System Settings**.
-- **Password policy:** New passwords require at least 4 characters.
-### Backup System
-- **Create backups:** One-click full server backup (`tar.gz` archive).
-- **Restore backups:** Restore any backup to replace current server files (server must be stopped).
-- **Download backups:** Download backup archives to your local machine.
-- **Delete backups:** Remove old backups with confirmation; multi-select for batch deletion.
-- **Scheduled backups:** Automatic backups on a recurring schedule: daily, weekly, monthly, every 6 months, or yearly.
-
-### File Browser
-- **Directory navigation:** Browse server files with breadcrumb path.
-- **File editor:** Edit text-based config files (`.properties`, `.yml`, `.json`, `.toml`, `.cfg`, `.xml`, etc.) directly in the browser.
-- **Editor search:** Inline search box in the editor toolbar with next/previous navigation and highlighted matches.
-- **Line numbers:** Text editor view shows line numbers for easier config editing and troubleshooting.
-- **Rename files and folders:** Select a single file or folder and click the pencil icon to rename it.
-- **Upload files:** Drag-and-drop or click to upload; newly uploaded files are highlighted with a "New!" indicator until you navigate away.
-- **Duplicate-safe file uploads:** If a file with the same name already exists, uploads are kept as `name(1).ext`, `name(2).ext`, etc. (no silent overwrite).
-- **Download files:** Download single files directly or multiple files as a zip archive.
-- **Create folders:** New directory creation.
-- **Multi-select:** Select multiple files for batch download or deletion.
-- **Delete:** Remove files and folders.
-- **Path traversal protection:** Sandboxed to the server directory.
+### Console and Monitoring
+- Real-time console over WebSocket with ANSI color rendering.
+- Sequence-based console resume using `lastSeq`, so console output stays current when changing tabs, sections, or servers.
+- Correct console reset after server reboot, followed by live streaming for the new run.
+- Live TPS, CPU, and RAM monitoring in the management view.
+- Vanilla servers show TPS as unsupported instead of sending invalid commands.
+- Player tracking uses `list` as the source of truth, with join/leave detection as triggers plus a low-frequency safety resync to avoid unnecessary console spam.
 
 ### Player Management
-- **Live player list:** Shows all online players with avatar, IP, ping, session time, and current world.
-- **Ping indicator:** Color-coded latency display (green <100ms, yellow 100-300ms, red >300ms).
-- **Vanilla ping behavior:** Ping column is marked unsupported for Vanilla servers with tooltip: `Not supported on this server type`.
-- **Current world:** Shows which dimension each player is in (Overworld, Nether, The End).
-- **Player search:** Filter players by name.
-- **Kick / Ban / Kill:** Player moderation actions with one click.
+- Live online player list with avatar, IP, ping, session time, and dimension when supported by the server type.
+- Search players by name.
+- Kick, ban, and kill actions from the panel.
+- Ping is shown as unsupported on Vanilla where that data is not available through the current server-side integration.
 
-### Logs
-- **Live log viewer:** Real-time log streaming with level filtering (INFO, WARN, ERROR).
-- **Robust log parsing:** Strips ANSI and Minecraft color codes, detects all log levels (INFO, WARN/WARNING, ERROR/FATAL/SEVERE).
-- **Search logs:** Full-text search across log output.
-- **Pause / Resume:** Freeze the log stream for inspection.
+### File Browser
+- Breadcrumb-based directory navigation.
+- Folder-scoped search with match highlighting in the current directory only.
+- Built-in text editor for common config and text formats.
+- Editor search with highlighted matches and next/previous navigation.
+- File and folder rename support.
+- Single-file, multi-file, and folder uploads.
+- Upload progress modal with percentage feedback.
+- Upload conflict prompt with `Replace` and `Skip` actions.
+- Newly uploaded files are visually marked until navigation changes.
+- File timestamps shown next to file size using the latest filesystem modification time.
+- Single-file download or multi-file zip download.
+- Multi-select delete and download actions.
+- File operations are sandboxed to each server directory.
+
+### Plugins and Mods
+- Automatic directory targeting: `plugins/` for plugin-based servers and `mods/` for modded servers.
+- Dynamic UI wording that switches between Plugins and Mods based on server type.
+- Vanilla disables the Plugins / Mods page because it is not supported.
+- Upload accepts `.jar` and `.JAR` files.
+- Duplicate plugin/mod uploads prompt `Replace` or `Skip` instead of silently creating renamed copies.
+- Enable and disable by renaming `.jar` and `.jar.disabled`.
+- Update checking through Modrinth and Spiget, with source-aware matching when a source URL is configured.
+- Update status badges: Latest, Outdated, Incompatible, and Unknown.
+- Safer update flow that validates replacements before swapping files.
+- Optional source URL metadata is stored outside the server root in `/AdPanel/data/extension-sources/`.
+
+### Backups and Logs
+- Create full server backups as `.tar.gz` archives.
+- Restore, download, and delete backups from the panel.
+- Scheduled backups with recurring intervals.
+- Live log viewer with search, level filtering, and pause/resume controls.
+- Crash report listing, reading, copying, downloading, and deletion.
 
 ### System Settings
-- **Panel credentials:** Change panel username and password used for login access.
-- **User-Agent configuration:** Set a custom User-Agent string used for all upstream API requests and downloads (hover tooltip warns non-technical users to leave it alone).
-- **Default RAM allocation:** Configure default min/max RAM for new servers (saves time when creating many servers).
-- **Default JVM flags preset:** Pre-select a JVM flags preset (None, Aikar's Flags, Velocity Proxy) for new servers.
-- **Status polling interval:** Configure how often the panel polls for server status updates (1-30 seconds).
-- **Persistent settings:** All settings are stored in `/AdPanel/data/settings.json` and survive restarts.
+- Change panel login username and password.
+- Configure the User-Agent used for upstream version and jar downloads.
+- Configure default min/max RAM for newly created servers.
+- Configure the default JVM flags preset for new servers.
+- Configure the status polling interval.
+- Settings persist in `/AdPanel/data/settings.json`.
 
-### Notifications
-- **Toast notifications:** Contextual success, error, warning, and info messages with circular close buttons.
-- **Color-matched close buttons:** Close buttons inside each toast match the notification type color (green for success, red for error, yellow for warning, blue for info).
+### Authentication and Security
+- Dedicated login screen for panel access.
+- Default first-run credentials: `mcpanel / mcpanel`.
+- Authentication sessions are stored in memory on the running panel instance.
+- A logged-in browser stays authenticated across tab or browser restarts while the panel is still running.
+- Restarting the panel or host clears active sessions and requires logging in again.
+- Passwords are stored hashed in settings, not in plaintext.
+- API routes are protected by authentication middleware.
+- Login attempts are rate-limited per client IP.
+- The panel and managed server processes run as a non-root `mcpanel` user in the container.
 
-### Security
-- **Non-root execution:** The panel and all Minecraft servers run as a dedicated `mcpanel` user, not root (this is really important).
-- **Privilege drop:** Entrypoint uses `gosu` to fix volume ownership then drops to unprivileged user.
-- **Session auth middleware:** API routes require a valid authenticated session.
-- **Password hashing:** Login passwords are stored hashed in settings (not plaintext).
-- **Path traversal protection:** File browser is sandboxed to each server's directory.
-- **Filename sanitization:** Plugin and server names are sanitized to prevent directory escape.
-
-### CasaOS Integration (or any docker based management app really)
-- **App icon:** Displays in the CasaOS dashboard with custom icon.
-- **Docker labels:** Configured for CasaOS app discovery (name, icon, port, scheme).
-- **AppData volumes:** Follows the CasaOS convention at `/DATA/AppData/minecraft-adpanel/`
-- **One-click access:** Open the panel directly from CasaOS UI.
+### CasaOS and Docker Deployment
+- Docker-first deployment model.
+- Host networking support for direct Minecraft port exposure.
+- CasaOS labels and icon metadata included in `docker-compose.yml`.
+- Persistent data layout under `/DATA/AppData/orexa-panel/` by default in the sample compose file.
 
 ## Architecture
 
-```
+```text
 +-----------------------------------------+
 |          Browser (React SPA)            |
-|   Vite + Tailwind CSS 4 + shadcn/ui    |
+|   Vite + Tailwind CSS 4 + shadcn/ui     |
 +----------------+------------------------+
                  | HTTP / WebSocket
 +----------------v------------------------+
 |         Go HTTP Server (:4010)          |
-|   REST API + Static file serving        |
+|      REST API + static file serving     |
 +----------------+------------------------+
                  | os/exec stdin/stdout
 +----------------v------------------------+
 |       Minecraft Server Processes        |
-|   java -jar server.jar (per server)     |
+|     java -jar / installer workflows     |
 +-----------------------------------------+
 ```
 
-- The Go backend starts on port **4010** and serves both the API and the compiled React frontend.
-- Each Minecraft server runs as a child process managed via `os/exec` with stdin/stdout piping.
-- Console output is streamed to clients over WebSocket in real time with ANSI color support.
-- Server metadata is persisted in a JSON file (`/AdPanel/data/servers.json`).
-- Backup scheduler runs as a background goroutine, checking every minute for due backups.
-- A player info poller periodically queries TPS, player list, ping, and dimension data via server commands.
-- Plugin/mod operations automatically target the correct directory (`plugins/` or `mods/`) based on server type.
+Key runtime details:
 
-### Directory Structure
+- The Go backend serves both the API and the built frontend on port `4010`.
+- Each Minecraft server is managed as a child process.
+- Console streaming uses a resumable sequence-based protocol.
+- Panel sessions are in memory and are cleared on panel restart.
+- Server metadata is stored in `/AdPanel/data/servers.json`.
+- System settings are stored in `/AdPanel/data/settings.json`.
+- Extension source metadata is stored in `/AdPanel/data/extension-sources/`.
+- Backups are stored under `/AdPanel/Backups/<server-name>/`.
 
-```
+## Directory Layout
+
+```text
 /AdPanel/
-â”œâ”€â”€ adpanel              # Go binary
-â”œâ”€â”€ dist/                # Compiled React frontend
-â”‚   â””â”€â”€ icon.png         # Favicon
-â”œâ”€â”€ data/
-â”‚   â”œâ”€â”€ servers.json     # Server configurations & backup schedules
-â”‚   â””â”€â”€ settings.json    # System settings (login user+hash, User-Agent, defaults, poll interval)
-â”œâ”€â”€ Servers/
-â”‚   â”œâ”€â”€ Survival/        # Server files (world, plugins/, server.jar, ...)
-â”‚   â”œâ”€â”€ Modded/          # Modded server files (world, mods/, server.jar, ...)
-â”‚   â””â”€â”€ Creative/
-â””â”€â”€ Backups/
-    â”œâ”€â”€ Survival/        # Backups for each server
-    â””â”€â”€ Creative/
+|-- orexa-panel
+|-- dist/
+|   `-- ...frontend build output...
+|-- data/
+|   |-- servers.json
+|   |-- settings.json
+|   `-- extension-sources/
+|-- Servers/
+|   |-- <ServerName>/
+|   `-- ...
+`-- Backups/
+    |-- <ServerName>/
+    `-- ...
 ```
 
 ## Getting Started
 
-### Docker (recommended)
+### Docker
 
 ```bash
-git clone <https://github.com/pbarrera813/MC-AdPanel>
-cd MC-AdPanel
-docker compose up -d
+git clone https://github.com/pbarrera813/Orexa-Panel.git
+cd Orexa-Panel
+docker compose up -d --build
 ```
 
-The panel will be available at `http://<your-server-ip>:4010`.
+Default login on first run:
 
-Default login credentials on first run:
-- **Username:** `mcpanel`
-- **Password:** `mcpanel`
+- Username: `mcpanel`
+- Password: `mcpanel`
 
-On first startup with default credentials, the backend also prints them in container logs so they can be viewed from Docker logs.
+The backend also prints the default credentials to the container logs on first startup while they are still unchanged.
 
-Docker uses **host networking** by default so Minecraft server ports (25565, etc.) are accessible directly. Persistent data is stored in three volumes:
+The included `docker-compose.yml` uses host networking by default so Minecraft ports are exposed directly on the host without per-port mappings.
 
-| Volume | Container Path | Purpose |
-|--------|---------------|---------|
-| Servers | `/AdPanel/Servers` | Server files (worlds, plugins, mods, configs) |
-| Data | `/AdPanel/data` | Panel configuration (`servers.json`, `settings.json`) |
-| Backups | `/AdPanel/Backups` | Server backup archives |
+Persistent data volumes in the sample compose file:
 
-All necessary directories are created automatically on first launch. If data already exists in the volumes, the panel detects it and preserves everything.
+| Host Path | Container Path | Purpose |
+|-----------|----------------|---------|
+| `/DATA/AppData/orexa-panel/servers` | `/AdPanel/Servers` | Server files |
+| `/DATA/AppData/orexa-panel/data` | `/AdPanel/data` | Panel configuration and metadata |
+| `/DATA/AppData/orexa-panel/backups` | `/AdPanel/Backups` | Backup archives |
 
-If you prefer bridge networking, edit `docker-compose.yml` â€” instructions are included as comments.
+If you prefer bridge networking, edit `docker-compose.yml` and use explicit port mappings instead of `network_mode: host`.
 
 ### CasaOS
 
-1. Copy the repository to your CasaOS server
+1. Copy the repository to the host.
 2. Build the image:
-   ```bash
-   cd MC-AdPanel
-   docker compose build --no-cache
-   ```
-3. In CasaOS, go to **App Store > Custom Install**
-4. Fill in:
-   - **Docker Image:** `minecraft-adpanel:latest`
-   - **Network:** Host
-   - **Restart Policy:** `unless-stopped`
-   - **Volumes:**
-   - **Icon URL:** `https://i.imgur.com/PPQD6NN.png`
 
-     | Host Path | Container Path |
-     |-----------|---------------|
-     | `/DATA/AppData/minecraft-adpanel/servers` | `/AdPanel/Servers` |
-     | `/DATA/AppData/minecraft-adpanel/data` | `/AdPanel/data` |
-     | `/DATA/AppData/minecraft-adpanel/backups` | `/AdPanel/Backups` |
-
-5. Click **Install**. The panel will be accessible on port `4010`.
-
-### Updating
-
-To update to a new version (if i ever release one):
-
-```
-git clone <https://github.com/pbarrera813/MC-AdPanel>
-cd MC-AdPanel
-docker compose up -d
+```bash
+cd Orexa-Panel
+docker compose build --no-cache
 ```
 
-Your server data, configuration, and backups are preserved in the mounted volumes.
+3. In CasaOS, open Custom Install.
+4. Use image `orexa-panel:latest`.
+5. Use host networking.
+6. Mount the same three volumes used in the sample compose file.
+7. Open the panel on port `4010`.
 
 ### Manual Setup
 
-**Requirements:**
-- Linux (the backend uses Linux-specific tools like `tar` for backups).
-- Go 1.22+.
-- Node.js 20+.
-- Java 17+ (21 recommended).
-- git (required for Spigot BuildTools).
+Requirements:
 
-**Build the frontend:**
+- Linux
+- Go 1.22+
+- Node.js 20+
+- Java 17+ for supported server runtimes and installers
+- Git for Spigot BuildTools
+
+Build frontend:
 
 ```bash
 npm install
 npm run build
 ```
 
-**Build the backend:**
+Build backend:
 
 ```bash
 cd backend
-go build -o adpanel .
+go build -o orexa-panel .
 ```
 
-**Run:**
+Run:
 
 ```bash
 export ADPANEL_DIR=/AdPanel
-mkdir -p $ADPANEL_DIR/Servers $ADPANEL_DIR/data $ADPANEL_DIR/Backups $ADPANEL_DIR/dist
-cp -r dist/* $ADPANEL_DIR/dist/
-cp backend/adpanel $ADPANEL_DIR/
-cd $ADPANEL_DIR
-./adpanel
+mkdir -p "$ADPANEL_DIR/Servers" "$ADPANEL_DIR/data" "$ADPANEL_DIR/Backups" "$ADPANEL_DIR/dist"
+cp -r dist/* "$ADPANEL_DIR/dist/"
+cp backend/orexa-panel "$ADPANEL_DIR/"
+cd "$ADPANEL_DIR"
+./orexa-panel
 ```
 
-Open `http://localhost:4010` in your browser.
+Open `http://localhost:4010`.
+
+## Updating
+
+To update the panel while preserving your mounted data:
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+If you suspect stale Docker build cache issues, use:
+
+```bash
+docker compose build --no-cache
+docker compose up -d
+```
+
+Notes:
+
+- Mounted data in `/AdPanel/Servers`, `/AdPanel/data`, and `/AdPanel/Backups` is preserved.
+- Orexa supports forward server version upgrades from the UI.
+- In-place Minecraft version downgrades are not supported from the UI; use a backup restore or cloned fallback if you need to roll a server back.
 
 ## Supported Server Types
 
 | Type | Source | Download Method |
-|------|--------|----------------|
-| **Vanilla** | [Mojang Version Manifest](https://piston-meta.mojang.com/mc/game/version_manifest_v2.json) | Direct official server jar download |
-| **Paper** | [PaperMC API](https://api.papermc.io) | Direct jar download |
-| **Folia** | [PaperMC API](https://api.papermc.io) | Direct jar download |
-| **Velocity** | [PaperMC API](https://api.papermc.io) | Direct jar download (proxy) |
-| **Purpur** | [Purpur API](https://api.purpurmc.org) | Direct jar download |
-| **Fabric** | [Fabric Meta](https://meta.fabricmc.net) | Server jar from loader + installer endpoint |
-| **Forge** | [MinecraftForge](https://files.minecraftforge.net) | Installer jar + `--installServer` |
-| **NeoForge** | [NeoForged Maven](https://maven.neoforged.net) | Installer jar + `--installServer` |
-| **Spigot** | [SpigotMC BuildTools](https://hub.spigotmc.org) | BuildTools compilation (~10 min) |
-
-Versions are fetched live from these APIs with a 15-minute in-memory cache.
+|------|--------|-----------------|
+| Vanilla | Mojang version manifest | Direct official server jar download |
+| Paper | PaperMC API | Direct jar download |
+| Spigot | Spigot BuildTools | BuildTools compilation |
+| Purpur | Purpur API | Direct jar download |
+| Folia | PaperMC API | Direct jar download |
+| Fabric | Fabric Meta | Loader and installer workflow |
+| Forge | MinecraftForge | Installer workflow |
+| NeoForge | NeoForged Maven | Installer workflow |
+| Velocity | PaperMC API | Direct jar download |
 
 ## Configuration
 
 | Environment Variable | Default | Description |
-|---------------------|---------|-------------|
-| `ADPANEL_DIR` | `/AdPanel` | Base directory for all panel data |
-| `ADPANEL_USER_AGENT` | _(none)_ | Override User-Agent for upstream API requests (can also be set in System Settings UI) |
-| `ADPANEL_DEBUG_PLUGIN_UPDATES` | `0` | Set to `1` to enable verbose plugin/mod update detection debug logs |
+|----------------------|---------|-------------|
+| `ADPANEL_DIR` | `/AdPanel` | Base directory for panel data |
+| `ADPANEL_USER_AGENT` | unset | Override User-Agent for upstream downloads |
+| `ADPANEL_ALLOWED_ORIGINS` | unset | Comma-separated list of origins allowed by the CORS middleware |
+| `ADPANEL_DEBUG_PLUGIN_UPDATES` | `0` | Enable verbose plugin/mod update diagnostics when set to `1` |
 
-Each Minecraft server's port is configured at creation time. The default port is `25565` â€” increment for additional servers (25566, 25567, ...).
-
-Additional settings (login credentials, default RAM, JVM flags, polling interval) can be configured from the System Settings page in the UI and are persisted to `/AdPanel/data/settings.json`.
+Most day-to-day configuration is managed from the System Settings page and stored in `/AdPanel/data/settings.json`.
 
 ## API Reference
 
-All endpoints are under `/api`. The panel web UI is served at `/`.
+All API routes are served under `/api`.
 
-### Auth
+### Health
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/auth/login` | Login and create session cookie |
-| `POST` | `/api/auth/logout` | Logout and clear session cookie |
-| `GET` | `/api/auth/session` | Check whether current session is authenticated |
+| `GET` | `/api/health` | Basic health response |
+| `GET` | `/api/ready` | Readiness check for runtime dependencies |
+
+### Auth
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/auth/login` | Authenticate and create a cookie-backed in-memory panel session |
+| `POST` | `/api/auth/logout` | Destroy the current session |
+| `GET` | `/api/auth/session` | Check whether the current browser session is authenticated |
 
 ### Servers
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/servers` | List all servers |
-| `POST` | `/api/servers` | Create a new server |
-| `DELETE` | `/api/servers/{id}` | Delete a server permanently |
+| `POST` | `/api/servers` | Create a server |
+| `DELETE` | `/api/servers/{id}` | Delete a server |
 | `PUT` | `/api/servers/{id}/name` | Rename a server |
 | `POST` | `/api/servers/{id}/start` | Start a server |
-| `POST` | `/api/servers/{id}/start-safe` | Start in safe mode |
+| `POST` | `/api/servers/{id}/start-safe` | Start a server in safe mode |
 | `POST` | `/api/servers/{id}/stop` | Stop a server |
-| `GET` | `/api/servers/{id}/status` | Get server status and metrics |
-| `PUT` | `/api/servers/{id}/version` | Update server jar version (server must be stopped) |
-| `PUT` | `/api/servers/{id}/settings` | Update RAM and player settings |
+| `GET` | `/api/servers/{id}/status` | Get runtime status and metrics |
+| `PUT` | `/api/servers/{id}/version` | Update a stopped server to a newer version |
+| `PUT` | `/api/servers/{id}/settings` | Update RAM and player-related settings |
 | `PUT` | `/api/servers/{id}/auto-start` | Toggle auto-start |
 | `PUT` | `/api/servers/{id}/flags` | Update JVM flags preset |
 | `POST` | `/api/servers/{id}/schedule-restart` | Schedule a restart |
-| `DELETE` | `/api/servers/{id}/schedule-restart` | Cancel scheduled restart |
-| `POST` | `/api/servers/{id}/retry-install` | Retry failed installation |
+| `DELETE` | `/api/servers/{id}/schedule-restart` | Cancel a scheduled restart |
+| `POST` | `/api/servers/{id}/retry-install` | Retry a failed installation |
 | `POST` | `/api/servers/clone` | Clone a server |
 
 ### Versions
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/versions/{type}` | Get available versions for a server type |
 
-### Console
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `WS` | `/api/logs/{id}` | WebSocket for real-time console logs |
+| `GET` | `/api/versions/{type}` | List available versions for a server type |
 
-### Plugins / Mods
+### Console and Logs
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/servers/{id}/plugins` | List plugins or mods (auto-detects `plugins/` or `mods/` directory) |
-| `POST` | `/api/servers/{id}/plugins` | Upload a plugin/mod jar |
-| `DELETE` | `/api/servers/{id}/plugins/{name}` | Delete a plugin/mod |
-| `PUT` | `/api/servers/{id}/plugins/{name}/toggle` | Enable/disable a plugin/mod |
-| `PUT` | `/api/servers/{id}/plugins/{name}/source` | Set or update plugin/mod source URL |
-| `GET` | `/api/servers/{id}/plugins/check-updates` | Check for available updates (Modrinth + Spiget) |
-| `POST` | `/api/servers/{id}/plugins/{name}/update` | Update a plugin/mod to latest version |
+| `WS` | `/api/logs/{id}` | Live console stream with resumable `lastSeq` support |
+| `GET` | `/api/servers/{id}/logs` | List saved log files |
+| `GET` | `/api/servers/{id}/logs/{name}` | Read a saved log file |
+
+### Plugins and Mods
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/servers/{id}/plugins` | List installed plugins or mods |
+| `POST` | `/api/servers/{id}/plugins` | Upload a plugin or mod jar |
+| `DELETE` | `/api/servers/{id}/plugins/{name}` | Delete a plugin or mod |
+| `PUT` | `/api/servers/{id}/plugins/{name}/toggle` | Enable or disable a plugin or mod |
+| `PUT` | `/api/servers/{id}/plugins/{name}/source` | Set or update the source URL for update matching |
+| `GET` | `/api/servers/{id}/plugins/check-updates` | Check for plugin or mod updates |
+| `POST` | `/api/servers/{id}/plugins/{name}/update` | Update a plugin or mod |
 
 ### Settings
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/settings` | Get system settings |
+| `GET` | `/api/settings` | Read system settings |
 | `PUT` | `/api/settings` | Update system settings |
 
 ### Backups
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/servers/{id}/backups` | List backups |
@@ -378,22 +363,25 @@ All endpoints are under `/api`. The panel web UI is served at `/`.
 | `DELETE` | `/api/servers/{id}/backups/{name}` | Delete a backup |
 | `GET` | `/api/servers/{id}/backups/{name}/download` | Download a backup |
 | `POST` | `/api/servers/{id}/backups/{name}/restore` | Restore a backup |
-| `GET` | `/api/servers/{id}/backup-schedule` | Get backup schedule |
-| `PUT` | `/api/servers/{id}/backup-schedule` | Set backup schedule |
+| `GET` | `/api/servers/{id}/backup-schedule` | Read backup schedule |
+| `PUT` | `/api/servers/{id}/backup-schedule` | Update backup schedule |
 
 ### Files
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/servers/{id}/files?path=` | List directory contents |
+| `GET` | `/api/servers/{id}/files/exists?path=` | Check whether a file exists |
 | `GET` | `/api/servers/{id}/files/content?path=` | Read file content |
-| `PUT` | `/api/servers/{id}/files/content` | Write file content |
-| `POST` | `/api/servers/{id}/files/upload` | Upload a file |
+| `PUT` | `/api/servers/{id}/files/content` | Save file content |
+| `POST` | `/api/servers/{id}/files/upload` | Upload files or folders |
 | `DELETE` | `/api/servers/{id}/files?path=` | Delete a file or directory |
 | `POST` | `/api/servers/{id}/files/mkdir` | Create a directory |
 | `PUT` | `/api/servers/{id}/files/rename` | Rename a file or directory |
-| `POST` | `/api/servers/{id}/files/download` | Download file(s) (single or zip) |
+| `POST` | `/api/servers/{id}/files/download` | Download one or more files |
 
 ### Players
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/servers/{id}/players` | List online players |
@@ -402,40 +390,44 @@ All endpoints are under `/api`. The panel web UI is served at `/`.
 | `POST` | `/api/servers/{id}/players/{name}/kill` | Kill a player |
 
 ### Crash Reports
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/servers/{id}/crash-reports` | List crash reports |
 | `GET` | `/api/servers/{id}/crash-reports/{name}` | Read a crash report |
+| `POST` | `/api/servers/{id}/crash-reports/{name}/copy` | Copy a crash report |
 | `DELETE` | `/api/servers/{id}/crash-reports/{name}` | Delete a crash report |
 
 ## Tech Stack
 
-**Backend:**
-- Go 1.22+ with `net/http` (ServeMux pattern matching).
-- gorilla/websocket for real-time console.
-- gopsutil for system metrics.
-- google/uuid for server IDs.
+Backend:
+- Go 1.22+
+- `net/http` ServeMux routing
+- `gorilla/websocket`
+- `gopsutil`
+- `google/uuid`
 
-**Frontend:**
-- React 18 + TypeScript.
-- Vite 6 (build tool).
-- Tailwind CSS 4.
-- shadcn/ui (Radix primitives).
-- Lucide React (icons).
-- Framer Motion (animations).
-- Recharts (charts).
-- Sonner (toast notifications).
+Frontend:
+- React 18
+- TypeScript
+- Vite 6
+- Tailwind CSS 4
+- shadcn/ui
+- Framer Motion
+- Recharts
+- Sonner
 
-**Runtime:**
-- Java 21 (Eclipse Temurin JRE).
-- Docker multi-stage build (Node > Go > Java).
+Runtime:
+- Java runtime for managed servers
+- Docker multi-stage build for the packaged image
 
 ## License
 
 Copyright 2026 Pablo Barrera
 
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the â€œSoftwareâ€), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
-THE SOFTWARE IS PROVIDED â€œAS ISâ€, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
