@@ -3,6 +3,8 @@ package handlers
 import (
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/gorilla/websocket"
 
@@ -29,8 +31,11 @@ func NewMinecraftHandler(mgr *minecraft.Manager) *MinecraftHandler {
 
 // wsMessage is the JSON structure sent to WebSocket clients
 type wsMessage struct {
-	Type string `json:"type"`
-	Line string `json:"line"`
+	Type    string                      `json:"type"`
+	Seq     uint64                      `json:"seq,omitempty"`
+	Line    string                      `json:"line,omitempty"`
+	Entries []minecraft.ConsoleLogEntry `json:"entries,omitempty"`
+	Reset   bool                        `json:"reset,omitempty"`
 }
 
 // WebSocketLogs returns an HTTP handler that upgrades to WebSocket for log streaming
@@ -58,9 +63,25 @@ func (h *MinecraftHandler) WebSocketLogs() http.Handler {
 
 		log.Printf("WebSocket connected for server %s", id)
 
-		// Subscribe to log stream
-		logCh, unsubscribe := h.mgr.SubscribeLogs(id)
+		var lastSeq uint64
+		if raw := strings.TrimSpace(r.URL.Query().Get("lastSeq")); raw != "" {
+			if parsed, err := strconv.ParseUint(raw, 10, 64); err == nil {
+				lastSeq = parsed
+			}
+		}
+
+		// Subscribe to live stream and capture missing entries since lastSeq.
+		snapshot, reset, logCh, unsubscribe := h.mgr.SubscribeLogsWithSnapshot(id, lastSeq)
 		defer unsubscribe()
+
+		if err := conn.WriteJSON(wsMessage{
+			Type:    "snapshot",
+			Entries: snapshot,
+			Reset:   reset,
+		}); err != nil {
+			log.Printf("WebSocket initial snapshot write error for server %s: %v", id, err)
+			return
+		}
 
 		// Channel to signal connection close
 		done := make(chan struct{})
@@ -77,10 +98,14 @@ func (h *MinecraftHandler) WebSocketLogs() http.Handler {
 					return
 				}
 
-				command := string(msg)
+				command := strings.TrimSpace(string(msg))
 				if command != "" {
 					if err := h.mgr.SendCommand(id, command); err != nil {
 						log.Printf("Failed to send command to server %s: %v", id, err)
+						continue
+					}
+					if err := h.mgr.RecordConsoleCommand(id, command); err != nil {
+						log.Printf("Failed to record command in console for server %s: %v", id, err)
 					}
 				}
 			}
@@ -89,13 +114,14 @@ func (h *MinecraftHandler) WebSocketLogs() http.Handler {
 		// Write loop: send log lines to client
 		for {
 			select {
-			case line, ok := <-logCh:
+			case entry, ok := <-logCh:
 				if !ok {
 					return // Channel closed
 				}
 				err := conn.WriteJSON(wsMessage{
 					Type: "log",
-					Line: line,
+					Seq:  entry.Seq,
+					Line: entry.Line,
 				})
 				if err != nil {
 					log.Printf("WebSocket write error for server %s: %v", id, err)

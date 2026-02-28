@@ -2,8 +2,11 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"os"
+	"strings"
 
 	"minecraft-admin/minecraft"
 )
@@ -51,13 +54,21 @@ func (h *PluginHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	savedName, err := h.mgr.UploadPlugin(id, header.Filename, data)
+	conflictAction := strings.ToLower(strings.TrimSpace(r.FormValue("conflictAction")))
+	savedName, status, err := h.mgr.UploadPlugin(id, header.Filename, data, conflictAction)
 	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			respondJSON(w, http.StatusConflict, map[string]string{
+				"error": "file_exists",
+				"name":  header.Filename,
+			})
+			return
+		}
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]string{"status": "uploaded", "name": savedName})
+	respondJSON(w, http.StatusOK, map[string]string{"status": status, "name": savedName})
 }
 
 // Delete handles DELETE /api/servers/{id}/plugins/{name}
