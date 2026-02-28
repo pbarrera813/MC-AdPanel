@@ -1289,10 +1289,10 @@ func (m *Manager) SetPluginSource(id, fileName, sourceURL string) error {
 		return err
 	}
 
-	sources := loadExtensionSources(cfg)
+	sources := m.loadExtensionSources(cfg)
 	key := normalizeExtensionSourceKey(fileName)
 	sources[key] = strings.TrimSpace(sourceURL)
-	if err := saveExtensionSources(cfg, sources); err != nil {
+	if err := m.saveExtensionSources(cfg, sources); err != nil {
 		return fmt.Errorf("failed to save source link: %w", err)
 	}
 
@@ -1625,11 +1625,11 @@ func (m *Manager) UpdatePlugin(id, fileName, downloadURL string) (*PluginInfo, e
 	os.Remove(backupPath)
 
 	if oldKey, newKey := normalizeExtensionSourceKey(fileName), normalizeExtensionSourceKey(targetFileName); oldKey != newKey {
-		sources := loadExtensionSources(cfg)
+		sources := m.loadExtensionSources(cfg)
 		if src, ok := sources[oldKey]; ok && strings.TrimSpace(src) != "" {
 			sources[newKey] = src
 			delete(sources, oldKey)
-			_ = saveExtensionSources(cfg, sources)
+			_ = m.saveExtensionSources(cfg, sources)
 		}
 	}
 

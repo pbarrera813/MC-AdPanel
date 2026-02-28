@@ -29,7 +29,7 @@ var (
 )
 
 func defaultUserAgent() string {
-	return "MC-AdPanel/1.0 (+https://github.com/pbarrera813/MC-AdPanel)"
+	return "Orexa-Panel/1.0 (+https://github.com/pbarrera813/Orexa-Panel)"
 }
 
 func defaultLoginUser() string {
@@ -225,6 +225,9 @@ func (m *Manager) UpdateAppSettings(userAgent, defaultMinRAM, defaultMaxRAM, def
 	if loginUser == "" {
 		loginUser = defaultLoginUser()
 	}
+	if len(loginUser) < 4 || len(loginUser) > 12 {
+		return AppSettings{}, fmt.Errorf("username must be between 4 and 12 characters")
+	}
 
 	passwordHash := m.settings.LoginPasswordHash
 	if strings.TrimSpace(loginPassword) != "" {
@@ -284,3 +287,4 @@ func (m *Manager) IsUsingDefaultLogin() bool {
 
 	return m.settings.LoginUser == defaultLoginUser() && verifyPassword(m.settings.LoginPasswordHash, defaultLoginPassword())
 }
+

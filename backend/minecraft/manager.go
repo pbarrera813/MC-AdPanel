@@ -119,6 +119,12 @@ type CrashReport struct {
 	Cause string `json:"cause"`
 }
 
+// ConsoleLogEntry represents one console line with a monotonic sequence ID.
+type ConsoleLogEntry struct {
+	Seq  uint64 `json:"seq"`
+	Line string `json:"line"`
+}
+
 // runningServer holds runtime state for a managed server
 type runningServer struct {
 	cmd                *exec.Cmd
@@ -128,8 +134,9 @@ type runningServer struct {
 	ram                float64
 	tps                float64
 	pid                int
-	logBuffer          []string
-	subscribers        []chan string
+	logBuffer          []ConsoleLogEntry
+	subscribers        []chan ConsoleLogEntry
+	nextLogSeq         uint64
 	players            map[string]*onlinePlayer
 	pingBlocked        map[string]bool
 	lastPingPlayer     string
@@ -139,6 +146,8 @@ type runningServer struct {
 	lastTpsCmd         time.Time
 	lastPlayerInfoCmd  time.Time
 	lastPingCmd        time.Time
+	pendingListRefresh bool
+	nextListRefreshAt  time.Time
 	pingSupported      bool
 	pingDisabledReason string
 	safeModeDisabled   []string // dirs renamed for safe mode (original paths)
@@ -146,25 +155,27 @@ type runningServer struct {
 	stopMetrics        chan struct{}
 }
 
-const maxLogBuffer = 0
-const logTrimSize = 100
+const maxLogBuffer = 2000
+const logTrimSize = 200
 
 // Regex patterns for player tracking and server info
 var (
-	joinPattern         = regexp.MustCompile(`([a-zA-Z0-9_]+)\[/([0-9.]+):\d+\] logged in`)
-	leavePattern        = regexp.MustCompile(`([a-zA-Z0-9_]+) left the game`)
+	// Support Java names and Floodgate-prefixed Bedrock names (prefix is configurable).
+	playerNamePattern   = `([^\s\[\]:]+)`
+	joinPattern         = regexp.MustCompile(playerNamePattern + `\[/([0-9a-fA-F:.]+):\d+\] logged in`)
+	leavePattern        = regexp.MustCompile(playerNamePattern + ` left the game`)
 	ansiPattern         = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 	mcColorPattern      = regexp.MustCompile(`§[0-9a-fk-or]`)
 	nameSanitize        = regexp.MustCompile(`[^a-zA-Z0-9_\-.]`)
 	tpsPattern          = regexp.MustCompile(`TPS from last 1m, 5m, 15m: \*?([0-9.]+)`)
 	forgeTpsPattern     = regexp.MustCompile(`(?i)overall:\s*(?:tps[:=]\s*)?([0-9.]+)\s*tps\b|overall:.*\btps[:=]\s*([0-9.]+)`)
 	simpleTpsPattern    = regexp.MustCompile(`(?i)\bTPS[:=]\s*([0-9.]+)`)
-	dimensionPattern    = regexp.MustCompile(`(\w+) has the following entity data: "minecraft:(\w+)"`)
+	dimensionPattern    = regexp.MustCompile(playerNamePattern + ` has the following entity data: "minecraft:(\w+)"`)
 	listPattern         = regexp.MustCompile(`There are (\d+) of a max of (\d+) players online:\s*(.*)`)
-	pingPattern1        = regexp.MustCompile(`(?i)ping of ([a-zA-Z0-9_]+) (?:is|was) ([0-9]+)`)
-	pingPattern2        = regexp.MustCompile(`(?i)([a-zA-Z0-9_]+)'?s ping(?: is|:)? ([0-9]+)`)
-	pingPattern3        = regexp.MustCompile(`(?i)([a-zA-Z0-9_]+) has (?:a )?ping(?: of)? ([0-9]+)`)
-	pingPattern4        = regexp.MustCompile(`(?i)([a-zA-Z0-9_]+)'s latency is ([0-9]+)\s*ms`)
+	pingPattern1        = regexp.MustCompile(`(?i)ping of ` + playerNamePattern + ` (?:is|was) ([0-9]+)`)
+	pingPattern2        = regexp.MustCompile(`(?i)` + playerNamePattern + `'?s ping(?: is|:)? ([0-9]+)`)
+	pingPattern3        = regexp.MustCompile(`(?i)` + playerNamePattern + ` has (?:a )?ping(?: of)? ([0-9]+)`)
+	pingPattern4        = regexp.MustCompile(`(?i)` + playerNamePattern + `'s latency is ([0-9]+)\s*ms`)
 	pingNotFoundPattern = regexp.MustCompile(`(?i)player not found or offline`)
 )
 
@@ -179,6 +190,11 @@ type Manager struct {
 	baseDir       string
 	stopScheduler chan struct{}
 	mu            sync.RWMutex
+}
+
+var hiddenServerRootArtifacts = map[string]struct{}{
+	".adpanel-extension-sources.json": {},
+	".console_history":                {},
 }
 
 // sanitizeName converts a server name to a safe directory name
@@ -244,6 +260,14 @@ func tpsCommandForType(serverType string) (string, bool) {
 		return "fabric tps", true
 	default:
 		return "", false
+	}
+}
+
+func scheduleListRefreshLocked(rs *runningServer, delay time.Duration) {
+	when := time.Now().Add(delay)
+	if !rs.pendingListRefresh || rs.nextListRefreshAt.IsZero() || when.Before(rs.nextListRefreshAt) {
+		rs.pendingListRefresh = true
+		rs.nextListRefreshAt = when
 	}
 }
 
@@ -382,6 +406,7 @@ func NewManager(baseDir string) (*Manager, error) {
 	if err := mgr.load(); err != nil {
 		return nil, err
 	}
+	mgr.migrateLegacyServerArtifacts()
 	if err := mgr.loadSettings(); err != nil {
 		return nil, err
 	}
@@ -393,7 +418,8 @@ func NewManager(baseDir string) (*Manager, error) {
 	for id := range mgr.configs {
 		mgr.running[id] = &runningServer{
 			status:      "Stopped",
-			logBuffer:   make([]string, 0),
+			logBuffer:   make([]ConsoleLogEntry, 0),
+			nextLogSeq:  1,
 			players:     make(map[string]*onlinePlayer),
 			pingBlocked: make(map[string]bool),
 		}
@@ -418,6 +444,47 @@ func NewManager(baseDir string) (*Manager, error) {
 	go mgr.runBackupScheduler()
 
 	return mgr, nil
+}
+
+func isServerRootSubPath(subPath string) bool {
+	cleaned := filepath.ToSlash(filepath.Clean(subPath))
+	return cleaned == "." || cleaned == "/"
+}
+
+func shouldHideServerRootArtifact(subPath, name string) bool {
+	if !isServerRootSubPath(subPath) {
+		return false
+	}
+	_, hidden := hiddenServerRootArtifacts[name]
+	return hidden
+}
+
+func (m *Manager) migrateLegacyServerArtifacts() {
+	for _, cfg := range m.configs {
+		if cfg == nil {
+			continue
+		}
+
+		legacySourcesPath := legacyExtensionSourcesPath(cfg)
+		if legacyData, err := os.ReadFile(legacySourcesPath); err == nil {
+			newPath := m.extensionSourcesPath(cfg)
+			if _, err := os.Stat(newPath); os.IsNotExist(err) {
+				if err := os.MkdirAll(filepath.Dir(newPath), 0755); err != nil {
+					log.Printf("[%s] failed to create extension sources dir: %v", cfg.Name, err)
+				} else if err := os.WriteFile(newPath, legacyData, 0644); err != nil {
+					log.Printf("[%s] failed to migrate extension sources: %v", cfg.Name, err)
+				}
+			}
+			if err := os.Remove(legacySourcesPath); err != nil && !os.IsNotExist(err) {
+				log.Printf("[%s] failed to remove legacy extension sources file: %v", cfg.Name, err)
+			}
+		}
+
+		legacyConsoleHistoryPath := filepath.Join(cfg.Dir, ".console_history")
+		if err := os.Remove(legacyConsoleHistoryPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("[%s] failed to remove legacy console history file: %v", cfg.Name, err)
+		}
+	}
 }
 
 // load reads servers.json into configs map
@@ -529,7 +596,8 @@ func (m *Manager) CreateServer(name, serverType, version string, port int, minRA
 	m.configs[id] = cfg
 	m.running[id] = &runningServer{
 		status:      "Installing",
-		logBuffer:   make([]string, 0),
+		logBuffer:   make([]ConsoleLogEntry, 0),
+		nextLogSeq:  1,
 		players:     make(map[string]*onlinePlayer),
 		pingBlocked: make(map[string]bool),
 	}
@@ -695,7 +763,10 @@ func (m *Manager) StartServer(id string) error {
 	rs.stdin = stdinPipe
 	rs.status = "Booting"
 	rs.pid = cmd.Process.Pid
-	rs.logBuffer = make([]string, 0)
+	rs.logBuffer = make([]ConsoleLogEntry, 0)
+	rs.nextLogSeq = 1
+	rs.pendingListRefresh = false
+	rs.nextListRefreshAt = time.Time{}
 	rs.players = make(map[string]*onlinePlayer)
 	rs.stopMetrics = make(chan struct{})
 	rs.mu.Unlock()
@@ -815,6 +886,8 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 			isReadyLine := strings.Contains(clean, "! For help,") || strings.Contains(clean, ")!")
 			if isReadyLine {
 				rs.status = "Running"
+				// Run one list scan shortly after boot to hydrate player list state.
+				scheduleListRefreshLocked(rs, 2*time.Second)
 				cfg := m.configs[id]
 				if cfg != nil {
 					log.Printf("[%s] Server is now running", cfg.Name)
@@ -832,12 +905,16 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 				JoinedAt: time.Now(),
 			}
 			delete(rs.pingBlocked, playerName)
+			// Reconcile player list state after join events without periodic list spam.
+			scheduleListRefreshLocked(rs, 200*time.Millisecond)
 		}
 
 		if matches := leavePattern.FindStringSubmatch(clean); len(matches) >= 2 {
 			playerName := matches[1]
 			delete(rs.players, playerName)
 			delete(rs.pingBlocked, playerName)
+			// Reconcile player list state after leave events without periodic list spam.
+			scheduleListRefreshLocked(rs, 200*time.Millisecond)
 		}
 
 		// Parse TPS response
@@ -994,9 +1071,9 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 
 		rs.mu.Unlock()
 
-		m.appendLog(rs, line)
+		entry := m.appendLog(rs, line)
 		if !suppressLine {
-			m.broadcastLog(rs, line)
+			m.broadcastLog(rs, entry)
 		}
 	}
 }
@@ -1007,9 +1084,8 @@ func (m *Manager) collectMetrics(id string, rs *runningServer) {
 	defer ticker.Stop()
 
 	tpsTicks := 0
-	playerInfoTicks := 0
-	listResyncTicks := 0
 	pingTicks := 0
+	listSafetyTicks := 0
 	listCmd := "list"
 	tpsCmd := ""
 	hasTpsCmd := false
@@ -1081,47 +1157,33 @@ func (m *Manager) collectMetrics(id string, rs *runningServer) {
 				m.SendCommand(id, tpsCmd)
 			}
 
-			// Query player info — only native commands (no plugin dependency)
-			playerInfoTicks++
-			listResyncTicks++
-			if !isProxyType(serverType) && playerInfoTicks >= 15 && status == "Running" {
-				playerInfoTicks = 0
-
-				rs.mu.RLock()
-				playerNames := make([]string, 0, len(rs.players))
-				for name := range rs.players {
-					playerNames = append(playerNames, name)
-				}
-				rs.mu.RUnlock()
-
-				if len(playerNames) > 0 {
-					listResyncTicks = 0
+			// Player list refresh is event-driven:
+			// one scan after boot and re-scan on join/leave events.
+			// Additionally run a low-frequency safety resync for custom/localized join/leave messages.
+			if !isProxyType(serverType) && status == "Running" {
+				listSafetyTicks++
+				if listSafetyTicks >= 60 { // ~120 seconds at 2s tick interval
+					listSafetyTicks = 0
 					rs.mu.Lock()
-					rs.lastPlayerInfoCmd = time.Now()
+					scheduleListRefreshLocked(rs, 0)
 					rs.mu.Unlock()
-
-					m.SendCommand(id, listCmd)
-					time.Sleep(300 * time.Millisecond)
-
-					for _, name := range playerNames {
-						// Get dimension (vanilla command, 1.13+)
-						m.SendCommand(id, "data get entity "+name+" Dimension")
-						time.Sleep(200 * time.Millisecond)
-					}
 				}
-			}
 
-			if !isProxyType(serverType) && listResyncTicks >= 5 && status == "Running" {
-				listResyncTicks = 0
-				rs.mu.RLock()
-				hasPlayers := len(rs.players) > 0
-				rs.mu.RUnlock()
-				if !hasPlayers {
-					rs.mu.Lock()
-					rs.lastPlayerInfoCmd = time.Now()
-					rs.mu.Unlock()
+				shouldSendList := false
+				now := time.Now()
+				rs.mu.Lock()
+				if rs.pendingListRefresh && (rs.nextListRefreshAt.IsZero() || !now.Before(rs.nextListRefreshAt)) {
+					rs.pendingListRefresh = false
+					rs.nextListRefreshAt = time.Time{}
+					rs.lastPlayerInfoCmd = now
+					shouldSendList = true
+				}
+				rs.mu.Unlock()
+				if shouldSendList {
 					m.SendCommand(id, listCmd)
 				}
+			} else if status != "Running" {
+				listSafetyTicks = 0
 			}
 
 			// Poll ping via PingPlayer (if available) every ~20 seconds
@@ -1243,26 +1305,80 @@ func (m *Manager) SendCommand(id, command string) error {
 	return err
 }
 
-// SubscribeLogs returns a channel that receives log lines and an unsubscribe function
-func (m *Manager) SubscribeLogs(id string) (chan string, func()) {
+// RecordConsoleCommand appends and broadcasts a panel-issued command so it appears in live console history.
+func (m *Manager) RecordConsoleCommand(id, command string) error {
 	m.mu.RLock()
 	rs, ok := m.running[id]
 	m.mu.RUnlock()
 
 	if !ok {
-		ch := make(chan string)
-		close(ch)
-		return ch, func() {}
+		return fmt.Errorf("server %s not found", id)
 	}
 
-	ch := make(chan string, 1000)
+	trimmed := strings.TrimSpace(command)
+	if trimmed == "" {
+		return nil
+	}
+
+	line := "> " + trimmed
+	entry := m.appendLog(rs, line)
+	m.broadcastLog(rs, entry)
+	return nil
+}
+
+// SubscribeLogs returns a channel that receives log lines and an unsubscribe function
+func (m *Manager) SubscribeLogs(id string) (chan string, func()) {
+	snapshot, _, logCh, unsubscribe := m.SubscribeLogsWithSnapshot(id, 0)
+	ch := make(chan string, len(snapshot)+1000)
+	for _, entry := range snapshot {
+		ch <- entry.Line
+	}
+	go func() {
+		defer close(ch)
+		for entry := range logCh {
+			ch <- entry.Line
+		}
+	}()
+	return ch, unsubscribe
+}
+
+// SubscribeLogsWithSnapshot returns missing log entries since lastSeq plus a live subscription channel.
+func (m *Manager) SubscribeLogsWithSnapshot(id string, lastSeq uint64) ([]ConsoleLogEntry, bool, chan ConsoleLogEntry, func()) {
+	m.mu.RLock()
+	rs, ok := m.running[id]
+	m.mu.RUnlock()
+
+	if !ok {
+		ch := make(chan ConsoleLogEntry)
+		close(ch)
+		return []ConsoleLogEntry{}, false, ch, func() {}
+	}
+
+	ch := make(chan ConsoleLogEntry, 1000)
 
 	rs.mu.Lock()
-	for _, line := range rs.logBuffer {
-		select {
-		case ch <- line:
-		default:
+	snapshot := make([]ConsoleLogEntry, 0, len(rs.logBuffer))
+	reset := false
+	if len(rs.logBuffer) > 0 {
+		oldestSeq := rs.logBuffer[0].Seq
+		newestSeq := rs.logBuffer[len(rs.logBuffer)-1].Seq
+		requiresFullSnapshot := lastSeq == 0 || lastSeq+1 < oldestSeq || lastSeq > newestSeq
+		if lastSeq > newestSeq {
+			// Client has a newer sequence than this stream, which means server log stream restarted.
+			reset = true
 		}
+		if requiresFullSnapshot {
+			snapshot = append(snapshot, rs.logBuffer...)
+		} else {
+			for _, entry := range rs.logBuffer {
+				if entry.Seq > lastSeq {
+					snapshot = append(snapshot, entry)
+				}
+			}
+		}
+	} else if lastSeq > 0 {
+		// Empty current buffer but client had history: treat as stream reset so UI can clear old logs.
+		reset = true
 	}
 	rs.subscribers = append(rs.subscribers, ch)
 	rs.mu.Unlock()
@@ -1278,28 +1394,37 @@ func (m *Manager) SubscribeLogs(id string) (chan string, func()) {
 		}
 	}
 
-	return ch, unsubscribe
+	return snapshot, reset, ch, unsubscribe
 }
 
 // appendLog adds a line to the circular log buffer
-func (m *Manager) appendLog(rs *runningServer, line string) {
+func (m *Manager) appendLog(rs *runningServer, line string) ConsoleLogEntry {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 
-	rs.logBuffer = append(rs.logBuffer, line)
+	if rs.nextLogSeq == 0 {
+		rs.nextLogSeq = 1
+	}
+	entry := ConsoleLogEntry{
+		Seq:  rs.nextLogSeq,
+		Line: line,
+	}
+	rs.nextLogSeq++
+	rs.logBuffer = append(rs.logBuffer, entry)
 	if maxLogBuffer > 0 && len(rs.logBuffer) > maxLogBuffer {
 		rs.logBuffer = rs.logBuffer[logTrimSize:]
 	}
+	return entry
 }
 
 // broadcastLog sends a line to all active subscribers
-func (m *Manager) broadcastLog(rs *runningServer, line string) {
+func (m *Manager) broadcastLog(rs *runningServer, entry ConsoleLogEntry) {
 	rs.mu.RLock()
 	defer rs.mu.RUnlock()
 
 	for _, ch := range rs.subscribers {
 		select {
-		case ch <- line:
+		case ch <- entry:
 		default:
 		}
 	}
@@ -1523,10 +1648,62 @@ func (m *Manager) RenameServer(id, name string) (*ServerInfo, error) {
 		return nil, fmt.Errorf("server name cannot be empty")
 	}
 
+	oldBackupDir := m.backupDir(cfg)
 	cfg.Name = name
-	m.persist()
+	newBackupDir := m.backupDir(cfg)
+
+	if oldBackupDir != newBackupDir {
+		if err := m.migrateBackupDir(oldBackupDir, newBackupDir); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := m.persist(); err != nil {
+		return nil, err
+	}
 
 	return m.serverInfo(id), nil
+}
+
+func (m *Manager) migrateBackupDir(oldDir, newDir string) error {
+	if _, err := os.Stat(oldDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to inspect existing backup directory: %w", err)
+	}
+
+	if _, err := os.Stat(newDir); os.IsNotExist(err) {
+		if err := os.Rename(oldDir, newDir); err != nil {
+			return fmt.Errorf("failed to move backup directory: %w", err)
+		}
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("failed to inspect target backup directory: %w", err)
+	}
+
+	entries, err := os.ReadDir(oldDir)
+	if err != nil {
+		return fmt.Errorf("failed to read old backup directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		srcPath := filepath.Join(oldDir, entry.Name())
+		targetName, err := uniqueFileNameInDir(newDir, entry.Name())
+		if err != nil {
+			return fmt.Errorf("failed to resolve backup name conflict for %q: %w", entry.Name(), err)
+		}
+		dstPath := filepath.Join(newDir, targetName)
+		if err := os.Rename(srcPath, dstPath); err != nil {
+			return fmt.Errorf("failed to move backup %q: %w", entry.Name(), err)
+		}
+	}
+
+	if err := os.Remove(oldDir); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove old backup directory: %w", err)
+	}
+
+	return nil
 }
 
 // StopAll gracefully stops all running servers
@@ -1702,7 +1879,7 @@ func extensionsDir(cfg *ServerConfig) string {
 	}
 }
 
-func extensionSourcesPath(cfg *ServerConfig) string {
+func legacyExtensionSourcesPath(cfg *ServerConfig) string {
 	return filepath.Join(cfg.Dir, ".adpanel-extension-sources.json")
 }
 
@@ -1714,8 +1891,16 @@ func normalizeExtensionSourceKey(fileName string) string {
 	return name
 }
 
-func loadExtensionSources(cfg *ServerConfig) map[string]string {
-	path := extensionSourcesPath(cfg)
+func (m *Manager) extensionSourcesPath(cfg *ServerConfig) string {
+	id := strings.TrimSpace(cfg.ID)
+	if id == "" {
+		id = sanitizeName(cfg.Name)
+	}
+	return filepath.Join(m.baseDir, "data", "extension-sources", id+".json")
+}
+
+func (m *Manager) loadExtensionSources(cfg *ServerConfig) map[string]string {
+	path := m.extensionSourcesPath(cfg)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return map[string]string{}
@@ -1731,7 +1916,7 @@ func loadExtensionSources(cfg *ServerConfig) map[string]string {
 	return sources
 }
 
-func saveExtensionSources(cfg *ServerConfig, sources map[string]string) error {
+func (m *Manager) saveExtensionSources(cfg *ServerConfig, sources map[string]string) error {
 	if sources == nil {
 		sources = map[string]string{}
 	}
@@ -1739,7 +1924,10 @@ func saveExtensionSources(cfg *ServerConfig, sources map[string]string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(extensionSourcesPath(cfg), data, 0644)
+	if err := os.MkdirAll(filepath.Dir(m.extensionSourcesPath(cfg)), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(m.extensionSourcesPath(cfg), data, 0644)
 }
 
 func sourceForFile(sources map[string]string, fileName string) string {
@@ -1768,7 +1956,7 @@ func (m *Manager) ListPlugins(id string) ([]PluginInfo, error) {
 		return nil, err
 	}
 
-	sources := loadExtensionSources(cfg)
+	sources := m.loadExtensionSources(cfg)
 	plugins := make([]PluginInfo, 0)
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -1815,31 +2003,50 @@ func (m *Manager) ListPlugins(id string) ([]PluginInfo, error) {
 }
 
 // UploadPlugin saves a .jar file to the server's plugins/mods directory.
-// If a file with the same name exists, it preserves the old file and appends (n) to the new one.
-func (m *Manager) UploadPlugin(id, fileName string, data []byte) (string, error) {
+// If a file with the same name exists, callers must choose whether to replace or skip it.
+func (m *Manager) UploadPlugin(id, fileName string, data []byte, conflictAction string) (string, string, error) {
 	m.mu.RLock()
 	cfg, ok := m.configs[id]
 	m.mu.RUnlock()
 	if !ok {
-		return "", fmt.Errorf("server %s not found", id)
+		return "", "", fmt.Errorf("server %s not found", id)
 	}
 
 	if !strings.HasSuffix(strings.ToLower(fileName), ".jar") {
-		return "", fmt.Errorf("only .jar files are allowed")
+		return "", "", fmt.Errorf("only .jar files are allowed")
 	}
 
 	pDir := extensionsDir(cfg)
 	os.MkdirAll(pDir, 0755)
-
-	uniqueName, err := uniqueFileNameInDir(pDir, fileName)
+	pluginPath, err := SafePath(pDir, fileName)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	pluginPath := filepath.Join(pDir, uniqueName)
+
+	conflictAction = strings.ToLower(strings.TrimSpace(conflictAction))
+	existingInfo, statErr := os.Stat(pluginPath)
+	if statErr == nil {
+		if existingInfo.IsDir() {
+			return "", "", fmt.Errorf("cannot replace directory with file")
+		}
+		if conflictAction == "skip" {
+			return fileName, "skipped", nil
+		}
+		if conflictAction != "replace" {
+			return fileName, "conflict", os.ErrExist
+		}
+	} else if !os.IsNotExist(statErr) {
+		return "", "", statErr
+	}
+
 	if err := os.WriteFile(pluginPath, data, 0644); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return uniqueName, nil
+	status := "uploaded"
+	if conflictAction == "replace" {
+		status = "replaced"
+	}
+	return fileName, status, nil
 }
 
 // DeletePlugin removes a plugin jar from the server's plugins directory
@@ -1860,11 +2067,11 @@ func (m *Manager) DeletePlugin(id, fileName string) error {
 		return err
 	}
 
-	sources := loadExtensionSources(cfg)
+	sources := m.loadExtensionSources(cfg)
 	key := normalizeExtensionSourceKey(fileName)
 	if _, ok := sources[key]; ok {
 		delete(sources, key)
-		if err := saveExtensionSources(cfg, sources); err != nil {
+		if err := m.saveExtensionSources(cfg, sources); err != nil {
 			return err
 		}
 	}
@@ -1895,14 +2102,14 @@ func (m *Manager) TogglePlugin(id, fileName string) (*PluginInfo, error) {
 		if err := os.Rename(oldPath, newPath); err != nil {
 			return nil, err
 		}
-		sources := loadExtensionSources(cfg)
+		sources := m.loadExtensionSources(cfg)
 		oldKey := normalizeExtensionSourceKey(fileName)
 		newKey := normalizeExtensionSourceKey(newName)
 		if oldKey != newKey {
 			if src, ok := sources[oldKey]; ok && strings.TrimSpace(src) != "" {
 				sources[newKey] = src
 				delete(sources, oldKey)
-				_ = saveExtensionSources(cfg, sources)
+				_ = m.saveExtensionSources(cfg, sources)
 			}
 		}
 		info, _ := os.Stat(newPath)
@@ -1930,14 +2137,14 @@ func (m *Manager) TogglePlugin(id, fileName string) (*PluginInfo, error) {
 	if err := os.Rename(oldPath, newPath); err != nil {
 		return nil, err
 	}
-	sources := loadExtensionSources(cfg)
+	sources := m.loadExtensionSources(cfg)
 	oldKey := normalizeExtensionSourceKey(fileName)
 	newKey := normalizeExtensionSourceKey(newName)
 	if oldKey != newKey {
 		if src, ok := sources[oldKey]; ok && strings.TrimSpace(src) != "" {
 			sources[newKey] = src
 			delete(sources, oldKey)
-			_ = saveExtensionSources(cfg, sources)
+			_ = m.saveExtensionSources(cfg, sources)
 		}
 	}
 	info, _ := os.Stat(newPath)
@@ -2271,6 +2478,9 @@ func (m *Manager) ListFiles(id, subPath string) ([]FileEntry, error) {
 
 	files := make([]FileEntry, 0)
 	for _, entry := range entries {
+		if shouldHideServerRootArtifact(subPath, entry.Name()) {
+			continue
+		}
 		info, err := entry.Info()
 		if err != nil {
 			continue
@@ -2995,8 +3205,8 @@ func (m *Manager) installServerJar(id, serverType, version string) {
 
 	progressFn := func(msg string) {
 		log.Printf("[%s] Install: %s", cfg.Name, msg)
-		m.appendLog(rs, fmt.Sprintf("[Installer] %s", msg))
-		m.broadcastLog(rs, fmt.Sprintf("[Installer] %s", msg))
+		entry := m.appendLog(rs, fmt.Sprintf("[Installer] %s", msg))
+		m.broadcastLog(rs, entry)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
