@@ -14,6 +14,7 @@ import { Sheet, SheetTrigger, SheetContent } from './components/ui/sheet';
 import { Menu } from 'lucide-react';
 import { ServerSwitcher } from './components/ServerSwitcher';
 import ErrorBoundary from './components/ErrorBoundary';
+import { AnimatePresence, motion } from 'motion/react';
 
 type View = 'servers' | 'management' | 'plugins' | 'backups' | 'logs' | 'cloning' | 'settings';
 
@@ -74,8 +75,19 @@ function MainLayout() {
           </div>
           <div className="w-8" />
         </div>
-        <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
-          {renderView()}
+        <div className="flex-1 min-h-0 overflow-hidden flex flex-col relative">
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={currentView}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.22, ease: 'easeOut' }}
+              className="flex-1 min-h-0 overflow-hidden flex flex-col"
+            >
+              {renderView()}
+            </motion.div>
+          </AnimatePresence>
         </div>
       </main>
     </div>
