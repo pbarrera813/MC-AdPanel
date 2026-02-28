@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useServer } from '../context/ServerContext';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from './ui/dropdown-menu';
 import { ChevronDown, Check } from 'lucide-react';
@@ -15,6 +15,7 @@ export const ServerSwitcher = ({ variant = 'sidebar', className }: ServerSwitche
   const { servers, activeServerId, setActiveServerId } = useServer();
   const activeServer = servers.find(s => s.id === activeServerId) || null;
   const hasMultiple = servers.length > 1;
+  const [isOpen, setIsOpen] = useState(false);
 
   const statusDot = activeServer
     ? activeServer.status === 'Running'
@@ -27,14 +28,15 @@ export const ServerSwitcher = ({ variant = 'sidebar', className }: ServerSwitche
     : 'bg-gray-500';
 
   const buttonClasses = clsx(
-    "w-full flex items-center justify-between gap-2 rounded-md border border-[#3a3a3a] bg-[#252524] text-gray-200",
+    "w-full flex items-center justify-between gap-2 rounded-lg border border-[#3a3a3a] bg-[#252524]/95 text-gray-100 shadow-[0_6px_18px_rgba(0,0,0,0.25)] backdrop-blur-sm",
     variant === 'sidebar' ? "px-3 py-2 text-sm" : "px-3 py-1.5 text-xs",
-    hasMultiple ? "hover:bg-[#2f2f2e] transition-colors" : "cursor-default",
+    hasMultiple ? "hover:bg-[#2f2f2e] transition-colors duration-200" : "cursor-default",
+    isOpen && hasMultiple ? "border-[#E5B80B]/60 ring-1 ring-[#E5B80B]/35" : "",
     className,
   );
 
   return (
-    <DropdownMenu>
+    <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
       <DropdownMenuTrigger asChild disabled={!hasMultiple}>
         <button className={buttonClasses}>
           <div className="flex items-center gap-2 min-w-0">
@@ -43,19 +45,27 @@ export const ServerSwitcher = ({ variant = 'sidebar', className }: ServerSwitche
               {activeServer ? activeServer.name : 'Select server'}
             </span>
           </div>
-          {hasMultiple && <ChevronDown size={14} className="text-gray-400 shrink-0" />}
+          {hasMultiple && (
+            <ChevronDown
+              size={14}
+              className={clsx(
+                "shrink-0 text-[#E5B80B] transition-transform duration-300 ease-out",
+                isOpen ? "rotate-180" : "rotate-0"
+              )}
+            />
+          )}
         </button>
       </DropdownMenuTrigger>
       {hasMultiple && (
         <DropdownMenuContent
           align={variant === 'header' ? 'start' : 'center'}
-          className="bg-[#252524] border border-[#3a3a3a] text-gray-200 w-64"
+          className="bg-[#252524]/98 border border-[#3a3a3a] text-gray-200 w-[var(--radix-dropdown-menu-trigger-width)] max-h-40 rounded-lg p-1 shadow-[0_14px_40px_rgba(0,0,0,0.45)]"
         >
           {servers.map(server => (
             <DropdownMenuItem
               key={server.id}
               onSelect={() => setActiveServerId(server.id)}
-              className="cursor-pointer focus:bg-[#333] focus:text-white"
+              className="cursor-pointer rounded-md focus:bg-[#343433] focus:text-white data-[highlighted]:bg-[#343433] data-[highlighted]:text-white"
             >
               <div className={clsx(
                 "w-2 h-2 rounded-full shrink-0",
