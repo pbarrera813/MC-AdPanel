@@ -25,28 +25,26 @@ Orexa Panel focuses on the workflows server admins use most often:
 - In-place forward version upgrades for stopped servers.
 - Inline rename and batch delete from the Servers page.
 - Server cloning with options to copy worlds, plugins/mods, and configs.
-- Clone port defaults use the closest free port instead of blindly incrementing by one.
+- Clone port defaults use the closest free port.
 - Scheduled restart support with preset delays and custom times.
 - Auto-start toggle per server.
 - Safe mode startup that temporarily disables plugins or mods and restores them after stop.
 
 ### Console and Monitoring
 - Real-time console over WebSocket with ANSI color rendering.
-- Sequence-based console resume using `lastSeq`, so console output stays current when changing tabs, sections, or servers.
+- Sequence-based console, so output stays current at all times
 - Correct console reset after server reboot, followed by live streaming for the new run.
 - Live TPS, CPU, and RAM monitoring in the management view.
-- Vanilla servers show TPS as unsupported instead of sending invalid commands.
 - Player tracking uses `list` as the source of truth, with join/leave detection as triggers plus a low-frequency safety resync to avoid unnecessary console spam.
 
 ### Player Management
 - Live online player list with avatar, IP, ping, session time, and dimension when supported by the server type.
 - Search players by name.
 - Kick, ban, and kill actions from the panel.
-- Ping is shown as unsupported on Vanilla where that data is not available through the current server-side integration.
 
 ### File Browser
 - Breadcrumb-based directory navigation.
-- Folder-scoped search with match highlighting in the current directory only.
+- Folder-scoped search with match highlighting in the current directory.
 - Built-in text editor for common config and text formats.
 - Editor search with highlighted matches and next/previous navigation.
 - File and folder rename support.
@@ -64,9 +62,9 @@ Orexa Panel focuses on the workflows server admins use most often:
 - Dynamic UI wording that switches between Plugins and Mods based on server type.
 - Vanilla disables the Plugins / Mods page because it is not supported.
 - Upload accepts `.jar` and `.JAR` files.
-- Duplicate plugin/mod uploads prompt `Replace` or `Skip` instead of silently creating renamed copies.
+- Duplicate plugin/mod uploads are preserved with an automatic numeric suffix instead of overwriting the existing file.
 - Enable and disable by renaming `.jar` and `.jar.disabled`.
-- Update checking through Modrinth and Spiget, with source-aware matching when a source URL is configured.
+- Update checking through Modrinth and Spigot APIs, with source-aware matching when a source URL is configured.
 - Update status badges: Latest, Outdated, Incompatible, and Unknown.
 - Safer update flow that validates replacements before swapping files.
 - Optional source URL metadata is stored outside the server root in `/AdPanel/data/extension-sources/`.
@@ -84,7 +82,6 @@ Orexa Panel focuses on the workflows server admins use most often:
 - Configure default min/max RAM for newly created servers.
 - Configure the default JVM flags preset for new servers.
 - Configure the status polling interval.
-- Settings persist in `/AdPanel/data/settings.json`.
 
 ### Authentication and Security
 - Dedicated login screen for panel access.
@@ -97,10 +94,10 @@ Orexa Panel focuses on the workflows server admins use most often:
 - Login attempts are rate-limited per client IP.
 - The panel and managed server processes run as a non-root `mcpanel` user in the container.
 
-### CasaOS and Docker Deployment
+### Docker Deployment
 - Docker-first deployment model.
 - Host networking support for direct Minecraft port exposure.
-- CasaOS labels and icon metadata included in `docker-compose.yml`.
+- Docker labels and icon metadata included in `docker-compose.yml`.
 - Persistent data layout under `/DATA/AppData/orexa-panel/` by default in the sample compose file.
 
 ## Architecture
