@@ -52,18 +52,32 @@ export const LogsPage = () => {
     <div className="flex-1 flex flex-col min-h-0 bg-[#1e1e1d]">
       <div className="bg-[#252524] border-b border-[#3a3a3a] px-4 md:px-6 py-4 flex flex-col md:flex-row md:justify-between md:items-center gap-3">
         <h2 className="text-xl font-bold text-white">Logs</h2>
-        <div className="flex bg-[#1a1a1a] rounded p-1 border border-[#333]">
+        <div className="relative flex bg-[#1a1a1a] rounded p-1 border border-[#333]">
            <button
              onClick={() => setActiveTab('live')}
-             className={clsx("px-4 py-1.5 rounded text-sm font-medium transition-colors", activeTab === 'live' ? "bg-[#333] text-white" : "text-gray-500 hover:text-gray-300")}
+             className={clsx("relative px-4 py-1.5 rounded text-sm font-medium transition-colors", activeTab === 'live' ? "text-white" : "text-gray-500 hover:text-gray-300")}
            >
-             Live Logs
+             {activeTab === 'live' && (
+               <motion.span
+                 layoutId="logs-tab-active"
+                 transition={{ type: 'spring', stiffness: 260, damping: 28, mass: 0.75 }}
+                 className="absolute inset-0 rounded bg-[#333]"
+               />
+             )}
+             <span className="relative z-10">Live Logs</span>
            </button>
            <button
              onClick={() => setActiveTab('crash-reports')}
-             className={clsx("px-4 py-1.5 rounded text-sm font-medium transition-colors", activeTab === 'crash-reports' ? "bg-[#333] text-white" : "text-gray-500 hover:text-gray-300")}
+             className={clsx("relative px-4 py-1.5 rounded text-sm font-medium transition-colors", activeTab === 'crash-reports' ? "text-white" : "text-gray-500 hover:text-gray-300")}
            >
-             Crash Reports
+             {activeTab === 'crash-reports' && (
+               <motion.span
+                 layoutId="logs-tab-active"
+                 transition={{ type: 'spring', stiffness: 260, damping: 28, mass: 0.75 }}
+                 className="absolute inset-0 rounded bg-[#333]"
+               />
+             )}
+             <span className="relative z-10">Crash Reports</span>
            </button>
         </div>
       </div>

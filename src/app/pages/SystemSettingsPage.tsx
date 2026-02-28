@@ -41,8 +41,9 @@ export const SystemSettingsPage = () => {
   }, []);
 
   const handleSave = async () => {
-    if (!loginUser.trim()) {
-      toast.error('Insert a valid value.');
+    const trimmedLoginUser = loginUser.trim();
+    if (trimmedLoginUser.length < 4 || trimmedLoginUser.length > 12) {
+      toast.error('Username must be between 4 and 12 characters.');
       return;
     }
     if (loginPassword.trim() && loginPassword.length < 4) {
@@ -63,7 +64,7 @@ export const SystemSettingsPage = () => {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          loginUser: loginUser.trim(),
+          loginUser: trimmedLoginUser,
           loginPassword,
           userAgent,
           defaultMinRam,
@@ -109,6 +110,8 @@ export const SystemSettingsPage = () => {
                   type="text"
                   value={loginUser}
                   onChange={(e) => setLoginUser(e.target.value)}
+                  minLength={4}
+                  maxLength={12}
                   className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B]"
                   disabled={saving}
                 />
@@ -126,6 +129,7 @@ export const SystemSettingsPage = () => {
               </div>
             </div>
             <p className="text-xs text-gray-500 mt-2">These credentials are required to access the panel after restart.</p>
+            <p className="text-xs text-gray-500 mt-1">Username must be between 4 and 12 characters.</p>
             <p className="text-xs text-gray-500 mt-1">If setting a new password, minimum length is 4 characters.</p>
 
             {/* User-Agent */}
@@ -137,7 +141,7 @@ export const SystemSettingsPage = () => {
                   type="text"
                   value={userAgent}
                   onChange={(e) => setUserAgent(e.target.value)}
-                  placeholder="MC-AdPanel/1.0 (+https://github.com/pbarrera813/MC-AdPanel)"
+                  placeholder="Orexa-Panel/1.0 (+https://github.com/pbarrera813/Orexa-Panel)"
                   className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B]"
                   disabled={saving}
                 />
@@ -153,7 +157,7 @@ export const SystemSettingsPage = () => {
             {/* Default RAM */}
             <hr className="border-[#3a3a3a] my-6" />
             <label className="block text-sm text-gray-400 mb-3">Default RAM Allocation</label>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Min RAM (GB)</label>
                 <input
@@ -238,3 +242,4 @@ export const SystemSettingsPage = () => {
     </div>
   );
 };
+

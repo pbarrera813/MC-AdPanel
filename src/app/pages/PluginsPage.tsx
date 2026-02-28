@@ -7,6 +7,27 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '../components/ui/toolti
 import clsx from 'clsx';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 
+type UploadConflictAction = 'prompt' | 'replace' | 'skip';
+
+interface UploadConflictState {
+  name: string;
+}
+
+interface UploadConflictPayload {
+  error?: string;
+  name?: string;
+}
+
+class UploadConflictError extends Error {
+  fileName: string;
+
+  constructor(fileName: string) {
+    super(`A ${fileName} already exists`);
+    this.name = 'UploadConflictError';
+    this.fileName = fileName;
+  }
+}
+
 interface PluginWithUpdate extends Plugin {
   latestVersion?: string;
   versionStatus?: 'latest' | 'outdated' | 'incompatible' | 'unknown';
@@ -45,6 +66,8 @@ export const PluginsPage = () => {
   const [pendingSource, setPendingSource] = useState<{ fileName: string; url: string } | null>(null);
   const [savingSourceFor, setSavingSourceFor] = useState<string | null>(null);
   const [editingSources, setEditingSources] = useState<Set<string>>(new Set());
+  const [uploadConflict, setUploadConflict] = useState<UploadConflictState | null>(null);
+  const uploadConflictResolverRef = useRef<((action: Exclude<UploadConflictAction, 'prompt'>) => void) | null>(null);
 
   const isServerOff = activeServer?.status === 'Stopped' || activeServer?.status === 'Crashed' || activeServer?.status === 'Error';
 
@@ -206,29 +229,96 @@ export const PluginsPage = () => {
     }
   };
 
+  const requestConflictAction = (fileName: string) =>
+    new Promise<Exclude<UploadConflictAction, 'prompt'>>((resolve) => {
+      uploadConflictResolverRef.current = resolve;
+      setUploadConflict({ name: fileName });
+    });
+
+  const uploadPluginFile = async (
+    file: File,
+    conflictAction: UploadConflictAction = 'prompt'
+  ): Promise<'uploaded' | 'replaced' | 'skipped'> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('conflictAction', conflictAction);
+    const res = await fetch(`/api/servers/${activeServer?.id}/plugins`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (res.status === 409) {
+      const payload = await res.json().catch(() => ({} as UploadConflictPayload));
+      if (payload?.error === 'file_exists') {
+        throw new UploadConflictError(payload.name || file.name);
+      }
+    }
+
+    const data = await res.json().catch(() => ({} as { error?: string; status?: string }));
+    if (!res.ok) {
+      throw new Error(data.error || `Failed to upload ${file.name}`);
+    }
+
+    if (data.status === 'replaced') return 'replaced';
+    if (data.status === 'skipped') return 'skipped';
+    return 'uploaded';
+  };
+
   const handleUpload = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0 || !activeServer) return;
     setUploading(true);
     try {
+      let uploadedCount = 0;
+      let skippedCount = 0;
       for (const file of Array.from(fileList)) {
-        if (!file.name.endsWith('.jar')) {
+        if (!file.name.toLowerCase().endsWith('.jar')) {
           toast.error(`${file.name} is not a .jar file`);
           continue;
         }
-        const formData = new FormData();
-        formData.append('file', file);
-        const res = await fetch(`/api/servers/${activeServer.id}/plugins`, {
-          method: 'POST',
-          body: formData,
-        });
-        if (!res.ok) throw new Error(`Failed to upload ${file.name}`);
+
+        let action: UploadConflictAction = 'prompt';
+        for (;;) {
+          try {
+            const result = await uploadPluginFile(file, action);
+            if (result === 'skipped') {
+              skippedCount += 1;
+            } else {
+              uploadedCount += 1;
+            }
+            break;
+          } catch (err) {
+            if (err instanceof UploadConflictError) {
+              const choice = await requestConflictAction(err.fileName);
+              uploadConflictResolverRef.current = null;
+              setUploadConflict(null);
+              if (choice === 'skip') {
+                skippedCount += 1;
+                break;
+              }
+              action = 'replace';
+              continue;
+            }
+            throw err;
+          }
+        }
       }
-      toast.success(`${itemLabelCap}(s) uploaded successfully`);
+      if (uploadedCount > 0 && skippedCount > 0) {
+        toast.success(`Uploaded ${uploadedCount} ${uploadedCount === 1 ? itemLabel : itemLabelPlural}, skipped ${skippedCount}`);
+      } else if (uploadedCount > 0) {
+        toast.success(`${itemLabelCap}(s) uploaded successfully`);
+      } else {
+        toast.info(skippedCount === 1 ? `${itemLabelCap} skipped` : `Skipped ${skippedCount} ${itemLabelPlural}`);
+      }
       setIsUploadModalOpen(false);
       fetchPlugins();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Upload failed');
     } finally {
+      if (uploadConflictResolverRef.current) {
+        uploadConflictResolverRef.current('skip');
+        uploadConflictResolverRef.current = null;
+      }
+      setUploadConflict(null);
       setUploading(false);
     }
   };
@@ -859,6 +949,46 @@ export const PluginsPage = () => {
                   disabled={uploading}
                 >
                   Cancel
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {uploadConflict && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-md bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6"
+            >
+              <h3 className="text-xl font-bold text-white mb-3">File already exists</h3>
+              <p className="text-gray-300 mb-6">
+                The destination already has a file named <span className="font-bold text-white">{uploadConflict.name}</span>.
+              </p>
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => {
+                    uploadConflictResolverRef.current?.('skip');
+                    uploadConflictResolverRef.current = null;
+                    setUploadConflict(null);
+                  }}
+                  className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
+                >
+                  Skip
+                </button>
+                <button
+                  onClick={() => {
+                    uploadConflictResolverRef.current?.('replace');
+                    uploadConflictResolverRef.current = null;
+                    setUploadConflict(null);
+                  }}
+                  className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold"
+                >
+                  Replace
                 </button>
               </div>
             </motion.div>

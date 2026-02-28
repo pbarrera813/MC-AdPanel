@@ -6,6 +6,29 @@ import { toast } from 'sonner';
 import clsx from 'clsx';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 
+const findNextAvailablePort = (startPort: number, occupiedPorts: Set<number>) => {
+  let port = Math.max(1024, startPort);
+  while (occupiedPorts.has(port) && port <= 65535) {
+    port += 1;
+  }
+  return Math.min(port, 65535);
+};
+
+const buildClonePortPlan = (startPort: number, count: number, occupiedPorts: Set<number>) => {
+  const reserved = new Set(occupiedPorts);
+  const ports: number[] = [];
+  let candidate = startPort;
+
+  for (let i = 0; i < count; i += 1) {
+    const nextPort = findNextAvailablePort(candidate, reserved);
+    ports.push(nextPort);
+    reserved.add(nextPort);
+    candidate = nextPort + 1;
+  }
+
+  return ports;
+};
+
 export const CloningPage = () => {
   const { servers, refreshServers } = useServer();
   const [selectedSourceIds, setSelectedSourceIds] = useState<Set<string>>(new Set());
@@ -37,8 +60,11 @@ export const CloningPage = () => {
     if (sources.length === 0) return;
 
     try {
-      let currentPort = newPort;
-      for (const source of sources) {
+      const occupiedPorts = new Set(servers.map((server) => server.port));
+      const plannedPorts = buildClonePortPlan(newPort, sources.length, occupiedPorts);
+
+      for (let i = 0; i < sources.length; i += 1) {
+        const source = sources[i];
         const cloneName = sources.length === 1 ? newName : `${source.name} (Clone)`;
         const res = await fetch('/api/servers/clone', {
           method: 'POST',
@@ -46,7 +72,7 @@ export const CloningPage = () => {
           body: JSON.stringify({
             sourceId: source.id,
             name: cloneName,
-            port: currentPort,
+            port: plannedPorts[i],
             copyPlugins: options.plugins,
             copyWorlds: options.worlds,
             copyConfig: options.config,
@@ -56,7 +82,6 @@ export const CloningPage = () => {
           const data = await res.json().catch(() => ({}));
           throw new Error(data.error || `Failed to clone ${source.name}`);
         }
-        currentPort++;
       }
       await refreshServers();
       toast.success(sources.length === 1 ? 'Server cloned successfully' : `${sources.length} servers cloned successfully`);
@@ -72,16 +97,24 @@ export const CloningPage = () => {
   const openModal = () => {
     const sources = servers.filter(s => selectedSourceIds.has(s.id));
     if (sources.length === 0) return;
+    const occupiedPorts = new Set(servers.map((server) => server.port));
     if (sources.length === 1) {
       setNewName(`${sources[0].name} (Clone)`);
-      setNewPort(sources[0].port + 1);
+      setNewPort(findNextAvailablePort(sources[0].port + 1, occupiedPorts));
     } else {
       setNewName('');
-      const maxPort = Math.max(...servers.map(s => s.port));
-      setNewPort(maxPort + 1);
+      const firstSourcePort = Math.min(...sources.map((source) => source.port + 1));
+      setNewPort(findNextAvailablePort(firstSourcePort, occupiedPorts));
     }
     setIsModalOpen(true);
   };
+
+  const selectedSources = servers.filter(s => selectedSourceIds.has(s.id));
+  const clonePortPlan = buildClonePortPlan(
+    newPort,
+    selectedSources.length,
+    new Set(servers.map((server) => server.port))
+  );
 
   return (
     <div className="flex-1 p-4 md:p-8 overflow-y-auto">
@@ -176,7 +209,9 @@ export const CloningPage = () => {
                     className="w-full bg-[#1a1a1a] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#E5B80B]"
                   />
                   {selectedSourceIds.size > 1 && (
-                    <p className="text-xs text-gray-500 mt-1">Ports will auto-increment: {newPort}, {newPort + 1}, {newPort + 2}...</p>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Ports will use the closest available values from {newPort}.
+                    </p>
                   )}
                 </div>
 
@@ -199,10 +234,10 @@ export const CloningPage = () => {
                   <div className="bg-[#1a1a1a] border border-[#333] rounded p-3">
                     <p className="text-xs text-gray-400 mb-2">Servers to clone:</p>
                     <ul className="text-sm text-gray-300 space-y-1">
-                      {servers.filter(s => selectedSourceIds.has(s.id)).map((s, i) => (
+                      {selectedSources.map((s, i) => (
                         <li key={s.id} className="flex items-center gap-2">
                           <span className="w-1.5 h-1.5 rounded-full bg-[#E5B80B] flex-shrink-0" />
-                          {s.name} <span className="text-gray-500 text-xs">→ Port {newPort + i}</span>
+                          {s.name} <span className="text-gray-500 text-xs">→ Port {clonePortPlan[i]}</span>
                         </li>
                       ))}
                     </ul>

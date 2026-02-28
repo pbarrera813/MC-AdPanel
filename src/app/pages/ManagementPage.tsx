@@ -14,7 +14,7 @@ import { FileBrowser } from '../components/management/FileBrowser';
 import { PlayerList } from '../components/management/PlayerList';
 
 type Tab = 'console' | 'browse' | 'players';
-type RestartOption = '5m' | '30m' | '1h' | '3h' | '6h' | 'custom';
+type RestartOption = 'now' | '5m' | '30m' | '1h' | '3h' | '6h' | 'custom';
 
 export const ManagementPage = () => {
   const { activeServer, startServer, stopServer, refreshServers } = useServer();
@@ -73,7 +73,14 @@ export const ManagementPage = () => {
     if (!activeServer) return;
 
     let delaySeconds = 0;
-    const delayMap: Record<string, number> = { '5m': 300, '30m': 1800, '1h': 3600, '3h': 10800, '6h': 21600 };
+    const delayMap: Record<Exclude<RestartOption, 'custom'>, number> = {
+      now: 0,
+      '5m': 300,
+      '30m': 1800,
+      '1h': 3600,
+      '3h': 10800,
+      '6h': 21600,
+    };
 
     if (restartOption === 'custom') {
       if (!customTime) {
@@ -103,10 +110,19 @@ export const ManagementPage = () => {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || 'Failed to schedule restart');
       }
-      const labelMap: Record<string, string> = { '5m': '5 minutes', '30m': '30 minutes', '1h': '1 hour', '3h': '3 hours', '6h': '6 hours' };
+      const labelMap: Record<Exclude<RestartOption, 'custom'>, string> = {
+        now: 'now',
+        '5m': '5 minutes',
+        '30m': '30 minutes',
+        '1h': '1 hour',
+        '3h': '3 hours',
+        '6h': '6 hours',
+      };
       const message = restartOption === 'custom'
         ? `Server restart scheduled for ${customTime}`
-        : `Server restart scheduled in ${labelMap[restartOption]}`;
+        : restartOption === 'now'
+          ? 'Server restart initiated now'
+          : `Server restart scheduled in ${labelMap[restartOption]}`;
       toast.success(message);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to schedule restart');
@@ -294,9 +310,15 @@ export const ManagementPage = () => {
       {/* Content Area */}
       <div className="flex-1 overflow-hidden flex relative min-h-0">
         <div className="flex-1 overflow-hidden flex flex-col relative z-0 min-h-0">
-          {activeTab === 'console' && <ConsoleView server={activeServer} />}
-          {activeTab === 'browse' && <FileBrowser server={activeServer} />}
-          {activeTab === 'players' && <PlayerList server={activeServer} />}
+          <div className={clsx('h-full min-h-0 overflow-hidden', activeTab === 'console' ? 'block' : 'hidden')}>
+            <ConsoleView server={activeServer} />
+          </div>
+          <div className={clsx('h-full min-h-0 overflow-hidden', activeTab === 'browse' ? 'block' : 'hidden')}>
+            <FileBrowser server={activeServer} />
+          </div>
+          <div className={clsx('h-full min-h-0 overflow-hidden', activeTab === 'players' ? 'block' : 'hidden')}>
+            <PlayerList server={activeServer} />
+          </div>
         </div>
         
         {/* Metrics Panel (Right Side) */}
@@ -368,7 +390,7 @@ export const ManagementPage = () => {
 
                <div>
                  <label className="block text-xs text-gray-500 mb-1">Allocated RAM</label>
-                 <div className="grid grid-cols-2 gap-2">
+                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                    <div>
                      <span className="block text-[10px] text-gray-600 mb-0.5">Min (GB)</span>
                      <div className="relative group/input">
@@ -518,6 +540,7 @@ export const ManagementPage = () => {
                   onChange={(e) => setRestartOption(e.target.value as RestartOption)}
                   className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B] focus:ring-1 focus:ring-[#E5B80B]"
                 >
+                  <option value="now">Restart now</option>
                   <option value="5m">In 5 minutes</option>
                   <option value="30m">In 30 minutes</option>
                   <option value="1h">In 1 hour</option>
@@ -526,20 +549,25 @@ export const ManagementPage = () => {
                   <option value="custom">Custom Time</option>
                 </select>
 
-                {restartOption === 'custom' && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                  >
-                    <label className="block text-sm text-gray-400 mb-2">Select Time:</label>
-                    <input 
-                      type="datetime-local" 
-                      value={customTime}
-                      onChange={(e) => setCustomTime(e.target.value)}
-                      className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B]"
-                    />
-                  </motion.div>
-                )}
+                <AnimatePresence initial={false}>
+                  {restartOption === 'custom' && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0, y: -4 }}
+                      animate={{ opacity: 1, height: 'auto', y: 0 }}
+                      exit={{ opacity: 0, height: 0, y: -4 }}
+                      transition={{ duration: 0.22, ease: 'easeOut' }}
+                      className="overflow-hidden"
+                    >
+                      <label className="block text-sm text-gray-400 mb-2">Select Time:</label>
+                      <input 
+                        type="datetime-local" 
+                        value={customTime}
+                        onChange={(e) => setCustomTime(e.target.value)}
+                        className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B]"
+                      />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
 
               <div className="flex justify-end gap-3">
@@ -685,15 +713,22 @@ const TabButton = ({ id, label, icon: Icon, active, onClick, disabled, disabledR
     disabled={disabled}
     title={disabledReason || undefined}
     className={clsx(
-      "flex items-center gap-2 px-4 py-3 border-t-2 transition-colors text-sm font-medium outline-none",
+      "relative flex items-center gap-2 px-4 py-3 border-t-2 transition-colors text-sm font-medium outline-none",
       active === id 
-        ? "border-[#E5B80B] bg-[#2C2C2B] text-white" 
+        ? "border-[#E5B80B] text-white" 
         : "border-transparent text-gray-500 hover:text-gray-300 hover:bg-[#252525]",
       disabled && "opacity-50 cursor-not-allowed hover:text-gray-500 hover:bg-transparent"
     )}
   >
-    <Icon size={16} />
-    {label}
+    {active === id && !disabled && (
+      <motion.span
+        layoutId="management-tab-active"
+        transition={{ type: 'spring', stiffness: 260, damping: 28, mass: 0.75 }}
+        className="absolute inset-x-0 inset-y-0 rounded-t-md bg-[#2C2C2B]"
+      />
+    )}
+    <Icon size={16} className="relative z-10" />
+    <span className="relative z-10">{label}</span>
   </button>
 );
 

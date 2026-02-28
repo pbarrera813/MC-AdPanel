@@ -19,6 +19,20 @@ interface VersionInfo {
   latest: boolean;
 }
 
+type JVMFlagsPreset = 'none' | 'aikars' | 'velocity' | 'modded';
+
+const DEFAULT_CREATE_FORM = {
+  name: '',
+  flags: 'none' as JVMFlagsPreset,
+  alwaysPreTouch: false,
+  type: '',
+  version: '',
+  port: '25565',
+  minRam: '0.5',
+  maxRam: '1',
+  maxPlayers: '20',
+};
+
 const compareVersionStrings = (a: string, b: string) => {
   const parse = (v: string) => v.split(/[^\d]+/).filter(Boolean).map(n => Number.parseInt(n, 10) || 0);
   const ap = parse(a);
@@ -36,17 +50,12 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
   const { servers, setActiveServerId, startServer, stopServer, addServer, refreshServers, loading } = useServer();
   const [isCreating, setIsCreating] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [formData, setFormData] = useState({
-    name: '',
-    flags: 'none' as 'none' | 'aikars' | 'velocity' | 'modded',
-    alwaysPreTouch: false,
-    type: '',
-    version: '',
-    port: '25565',
-    minRam: '0.5',
-    maxRam: '1',
-    maxPlayers: '20',
+  const [formDefaults, setFormDefaults] = useState({
+    minRam: DEFAULT_CREATE_FORM.minRam,
+    maxRam: DEFAULT_CREATE_FORM.maxRam,
+    flags: DEFAULT_CREATE_FORM.flags,
   });
+  const [formData, setFormData] = useState(DEFAULT_CREATE_FORM);
   const [versions, setVersions] = useState<VersionInfo[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [typeVersionCatalog, setTypeVersionCatalog] = useState<Record<string, VersionInfo[]>>({});
@@ -58,11 +67,17 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
     fetch('/api/settings')
       .then(res => res.json())
       .then(data => {
+        const defaults = {
+          minRam: data.defaultMinRam || DEFAULT_CREATE_FORM.minRam,
+          maxRam: data.defaultMaxRam || DEFAULT_CREATE_FORM.maxRam,
+          flags: (data.defaultFlags || DEFAULT_CREATE_FORM.flags) as JVMFlagsPreset,
+        };
+        setFormDefaults(defaults);
         setFormData(prev => ({
           ...prev,
-          minRam: data.defaultMinRam || prev.minRam,
-          maxRam: data.defaultMaxRam || prev.maxRam,
-          flags: data.defaultFlags || prev.flags,
+          minRam: defaults.minRam,
+          maxRam: defaults.maxRam,
+          flags: defaults.flags,
         }));
       })
       .catch(() => {});
@@ -192,7 +207,12 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
       });
       toast.success('Server created! Installing server jar...');
       setIsCreating(false);
-      setFormData({ name: '', flags: 'none', alwaysPreTouch: false, type: '', version: '', port: '25565', minRam: '0.5', maxRam: '1', maxPlayers: '20' });
+      setFormData({
+        ...DEFAULT_CREATE_FORM,
+        minRam: formDefaults.minRam,
+        maxRam: formDefaults.maxRam,
+        flags: formDefaults.flags,
+      });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to create server');
     } finally {
@@ -716,7 +736,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4 mt-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6">
                 <div className="bg-[#1a1a1a] p-3 rounded border border-[#333]">
                   <div className="flex items-center gap-2 text-gray-400 text-xs mb-1">
                     <Cpu size={14} /> CPU

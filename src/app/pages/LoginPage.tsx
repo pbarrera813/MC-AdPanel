@@ -55,8 +55,8 @@ export const LoginPage = ({ onLoginSuccess }: LoginPageProps) => {
         }`}
       >
         <div className="flex flex-col items-center mb-7">
-          <img src="/icon.png" alt="MC AdPanel" className="w-16 h-16 mb-3 drop-shadow-[0_0_12px_rgba(229,184,11,0.35)]" />
-          <h1 className="text-xl font-bold text-white tracking-wide">Minecraft Admin Panel</h1>
+          <img src="/icon.png" alt="Orexa Panel" className="w-16 h-16 mb-3 drop-shadow-[0_0_12px_rgba(229,184,11,0.35)]" />
+          <h1 className="text-xl font-bold text-white tracking-wide">Orexa Panel</h1>
         </div>
 
           <form onSubmit={handleSubmit} className="space-y-4" autoComplete="on">
@@ -98,3 +98,4 @@ export const LoginPage = ({ onLoginSuccess }: LoginPageProps) => {
     </div>
   );
 };
+
