@@ -1,5 +1,5 @@
 {
-  "name": "@pbarrera813/mc-adpanel",
+  "name": "@pbarrera813/orexa-panel",
   "private": true,
   "version": "1.0.1",
   "type": "module",
@@ -76,3 +76,4 @@
     }
   }
 }
+

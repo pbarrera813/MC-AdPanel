@@ -31,14 +31,14 @@ RUN go mod tidy && go mod download
 
 # Copy backend source and build a static binary
 COPY backend/ ./
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o adpanel .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o orexa-panel .
 
 # ============================================================
 # Stage 3: Runtime image with Java for Minecraft servers
 # ============================================================
 FROM eclipse-temurin:21-jre-jammy
 
-LABEL maintainer="Minecraft Admin Panel"
+LABEL maintainer="Orexa Panel"
 LABEL description="Minecraft server administration panel"
 
 # Install tar + gzip (for backups), git (for Spigot BuildTools), gosu (for privilege drop), and basic utilities
@@ -54,7 +54,7 @@ RUN mkdir -p /AdPanel/Servers /AdPanel/data /AdPanel/dist /AdPanel/Backups && \
     chown -R mcpanel:mcpanel /AdPanel
 
 # Copy the compiled Go binary
-COPY --from=backend --chown=mcpanel:mcpanel /build/adpanel /AdPanel/adpanel
+COPY --from=backend --chown=mcpanel:mcpanel /build/orexa-panel /AdPanel/orexa-panel
 
 # Copy the built React frontend
 COPY --from=frontend --chown=mcpanel:mcpanel /build/dist /AdPanel/dist
@@ -79,3 +79,4 @@ ENV ADPANEL_DIR=/AdPanel
 
 # Entrypoint fixes volume ownership then runs as mcpanel via gosu
 ENTRYPOINT ["/AdPanel/entrypoint.sh"]
+

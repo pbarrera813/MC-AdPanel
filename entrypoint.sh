@@ -3,4 +3,5 @@
 chown -R mcpanel:mcpanel /AdPanel/Servers /AdPanel/data /AdPanel/Backups 2>/dev/null
 
 # Drop privileges and run the panel as mcpanel
-exec gosu mcpanel /AdPanel/adpanel
+exec gosu mcpanel /AdPanel/orexa-panel
+

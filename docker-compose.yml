@@ -1,8 +1,8 @@
 services:
-  adpanel:
+  orexa-panel:
     build: .
-    image: minecraft-adpanel:latest
-    container_name: minecraft-adpanel
+    image: orexa-panel:latest
+    container_name: orexa-panel
     restart: unless-stopped
 
     # Host networking is recommended for Minecraft server panels:
@@ -13,11 +13,11 @@ services:
 
     volumes:
       # Server files persist here — your worlds, plugins, configs
-      - /DATA/AppData/minecraft-adpanel/servers:/AdPanel/Servers
+      - /DATA/AppData/orexa-panel/servers:/AdPanel/Servers
       # Panel configuration (servers.json)
-      - /DATA/AppData/minecraft-adpanel/data:/AdPanel/data
+      - /DATA/AppData/orexa-panel/data:/AdPanel/data
       # Backups stored centrally
-      - /DATA/AppData/minecraft-adpanel/backups:/AdPanel/Backups
+      - /DATA/AppData/orexa-panel/backups:/AdPanel/Backups
       # Host timezone — so console timestamps match your local time
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
@@ -26,12 +26,12 @@ services:
       - ADPANEL_DIR=/AdPanel
       # Some upstream APIs (e.g., PaperMC) require a non-generic User-Agent with contact info.
       # Set this to your preferred contact URL or email.
-      # - ADPANEL_USER_AGENT=MinecraftAdminPanel/1.0 (contact: admin@example.com)
+      # - ADPANEL_USER_AGENT=Orexa-Panel/1.0 (contact: admin@example.com)
 
     labels:
-      icon: https://i.imgur.com/PPQD6NN.png
-      io.casaos.app.name: Minecraft Admin Panel
-      io.casaos.app.icon: https://i.imgur.com/PPQD6NN.png
+      icon: https://i.imgur.com/dwk4qPO.png
+      io.casaos.app.name: Orexa Panel
+      io.casaos.app.icon: https://i.imgur.com/dwk4qPO.png
       io.casaos.app.port: "4010"
       io.casaos.app.scheme: http
 
@@ -44,3 +44,4 @@ services:
     #   - "25566:25566"     # Minecraft server 2
     #   - "25567:25567"     # Minecraft server 3
     #   # Add more ports as needed for additional servers
+
