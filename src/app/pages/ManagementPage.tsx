@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useServer } from '../context/ServerContext';
-import { Play, Square, AlertOctagon, RotateCw, Terminal, Folder, Users, ShieldAlert, Cpu, HardDrive, Clock, Calendar, AlertTriangle, Settings, Save, ChevronUp, ChevronDown } from 'lucide-react';
+import { Play, Square, AlertOctagon, RotateCw, Terminal, Folder, Users, ShieldAlert, Cpu, HardDrive, Clock, Calendar as CalendarIcon, AlertTriangle, Settings, Save, ChevronUp, ChevronDown } from 'lucide-react';
 import { AreaChart, Area, ResponsiveContainer } from 'recharts';
 import clsx from 'clsx';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../components/ui/tooltip';
 import { useEscapeKey } from '../hooks/useEscapeKey';
+import { format } from 'date-fns';
+import { Calendar } from '../components/ui/calendar';
+import { Popover, PopoverTrigger, PopoverContent } from '../components/ui/popover';
 
 // Sub-components (could be separate files but kept here for now for speed)
 import { ConsoleView } from '../components/management/ConsoleView';
@@ -15,6 +18,148 @@ import { PlayerList } from '../components/management/PlayerList';
 
 type Tab = 'console' | 'browse' | 'players';
 type RestartOption = 'now' | '5m' | '30m' | '1h' | '3h' | '6h' | 'custom';
+type StopOption = '5m' | '30m' | '1h' | '3h' | '6h' | 'custom';
+
+const timeSelectOptions = (limit: number) =>
+  Array.from({ length: limit }, (_, index) => ({
+    value: String(index).padStart(2, '0'),
+    label: String(index).padStart(2, '0'),
+  }));
+
+const hourOptions = timeSelectOptions(24);
+const minuteOptions = timeSelectOptions(60);
+
+const formatDateTimeValue = (value: Date | null) => {
+  if (!value) return 'dd/mm/yyyy --:--';
+  return format(value, 'dd/MM/yyyy HH:mm');
+};
+
+const formatDateTimeForToast = (value: Date) => format(value, 'dd/MM/yyyy HH:mm');
+
+const mergeDateWithTime = (date: Date, currentValue: Date | null) => {
+  const next = new Date(date);
+  if (currentValue) {
+    next.setHours(currentValue.getHours(), currentValue.getMinutes(), 0, 0);
+  } else {
+    next.setHours(12, 0, 0, 0);
+  }
+  return next;
+};
+
+const setDateTimePart = (value: Date | null, part: 'hours' | 'minutes', nextValue: number) => {
+  const next = value ? new Date(value) : new Date();
+  if (part === 'hours') {
+    next.setHours(nextValue);
+  } else {
+    next.setMinutes(nextValue);
+  }
+  next.setSeconds(0, 0);
+  return next;
+};
+
+type DateTimePopoverProps = {
+  value: Date | null;
+  onChange: (value: Date | null) => void;
+  placeholder?: string;
+};
+
+const DateTimePopover = ({ value, onChange, placeholder = 'dd/mm/yyyy --:--' }: DateTimePopoverProps) => {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={clsx(
+            "w-full bg-[#1a1a1a] border rounded p-3 text-left flex items-center justify-between gap-3 transition-colors",
+            open ? "border-[#E5B80B] ring-1 ring-[#E5B80B]" : "border-[#3a3a3a] hover:border-[#5a5a5a]"
+          )}
+        >
+          <span className={clsx("font-mono text-sm", value ? "text-white" : "text-gray-500")}>
+            {value ? formatDateTimeValue(value) : placeholder}
+          </span>
+          <CalendarIcon size={16} className="text-gray-400" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        sideOffset={6}
+        className="w-[320px] border-[#5a4a12] bg-[#202020] p-0 text-white shadow-2xl shadow-black/45"
+      >
+        <div className="border-b border-[#3a3a3a] px-4 py-3">
+          <div className="text-xs uppercase tracking-[0.18em] text-gray-500">Choose Date</div>
+          <div className="mt-1 text-sm font-semibold text-[#F3E6A1]">
+            {value ? format(value, 'EEEE, dd MMMM yyyy') : 'No date selected'}
+          </div>
+        </div>
+        <Calendar
+          mode="single"
+          selected={value ?? undefined}
+          onSelect={(nextDate) => {
+            if (!nextDate) return;
+            onChange(mergeDateWithTime(nextDate, value));
+          }}
+          className="p-3"
+          classNames={{
+            month: "flex flex-col gap-3",
+            caption_label: "text-sm font-semibold text-white",
+            nav_button: "h-7 w-7 rounded border border-[#4b4b4b] bg-[#252524] p-0 text-gray-300 opacity-100 hover:bg-[#333] hover:text-white",
+            table: "w-full border-collapse",
+            head_cell: "w-9 text-[0.75rem] font-medium uppercase text-gray-500",
+            row: "mt-1 flex w-full",
+            cell: "relative h-9 w-9 p-0 text-center text-sm",
+            day: "h-9 w-9 rounded-md p-0 text-sm font-medium text-gray-200 hover:bg-[#2e2e2e] hover:text-white",
+            day_selected: "bg-[#E5B80B] text-black hover:bg-[#d4a90a] hover:text-black focus:bg-[#E5B80B] focus:text-black",
+            day_today: "border border-[#E5B80B]/60 bg-[#E5B80B]/12 text-[#F3E6A1]",
+            day_outside: "text-gray-600",
+            day_disabled: "text-gray-700 opacity-40",
+          }}
+        />
+        <div className="border-t border-[#3a3a3a] px-4 py-3">
+          <div className="mb-2 text-xs uppercase tracking-[0.18em] text-gray-500">Choose Time</div>
+          <div className="flex items-center gap-2">
+            <select
+              value={value ? String(value.getHours()).padStart(2, '0') : '12'}
+              onChange={(e) => onChange(setDateTimePart(value, 'hours', Number(e.target.value)))}
+              className="flex-1 rounded border border-[#3a3a3a] bg-[#1a1a1a] px-3 py-2 text-sm text-white focus:border-[#E5B80B] focus:outline-none"
+            >
+              {hourOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+            <span className="text-gray-500">:</span>
+            <select
+              value={value ? String(value.getMinutes()).padStart(2, '0') : '00'}
+              onChange={(e) => onChange(setDateTimePart(value, 'minutes', Number(e.target.value)))}
+              className="flex-1 rounded border border-[#3a3a3a] bg-[#1a1a1a] px-3 py-2 text-sm text-white focus:border-[#E5B80B] focus:outline-none"
+            >
+              {minuteOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="mt-3 flex justify-between">
+            <button
+              type="button"
+              onClick={() => onChange(null)}
+              className="px-3 py-1.5 text-xs border border-[#4b4b4b] rounded bg-[#252524] text-gray-300 hover:bg-[#333] hover:text-white transition-colors"
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="px-3 py-1.5 text-xs rounded bg-[#E5B80B] text-black font-bold hover:bg-[#d4a90a] transition-colors"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+};
 
 export const ManagementPage = () => {
   const { activeServer, startServer, stopServer, refreshServers } = useServer();
@@ -24,6 +169,7 @@ export const ManagementPage = () => {
 
   // Modals State
   const [isRestartModalOpen, setIsRestartModalOpen] = useState(false);
+  const [isStopModalOpen, setIsStopModalOpen] = useState(false);
   const [isSafeModeModalOpen, setIsSafeModeModalOpen] = useState(false);
   const [isKillModalOpen, setIsKillModalOpen] = useState(false);
   const [isStopToEditModalOpen, setIsStopToEditModalOpen] = useState(false);
@@ -49,7 +195,9 @@ export const ManagementPage = () => {
   }, [activeServer?.id, activeServer?.minRam, activeServer?.maxRam, activeServer?.maxPlayers, activeServer?.port]);
   
   const [restartOption, setRestartOption] = useState<RestartOption>('5m');
-  const [customTime, setCustomTime] = useState('');
+  const [stopOption, setStopOption] = useState<StopOption>('5m');
+  const [customTime, setCustomTime] = useState<Date | null>(null);
+  const [customStopTime, setCustomStopTime] = useState<Date | null>(null);
 
   useEffect(() => {
     const handleResize = () => setIsLargeScreen(window.innerWidth >= 1280);
@@ -65,6 +213,7 @@ export const ManagementPage = () => {
   }, [playersUnsupportedForType, activeTab]);
 
   useEscapeKey(isRestartModalOpen, () => setIsRestartModalOpen(false));
+  useEscapeKey(isStopModalOpen, () => setIsStopModalOpen(false));
   useEscapeKey(isSafeModeModalOpen, () => setIsSafeModeModalOpen(false));
   useEscapeKey(isKillModalOpen, () => setIsKillModalOpen(false));
   useEscapeKey(isStopToEditModalOpen, () => setIsStopToEditModalOpen(false));
@@ -87,7 +236,7 @@ export const ManagementPage = () => {
         toast.error("Please select a time");
         return;
       }
-      const targetTime = new Date(customTime).getTime();
+      const targetTime = customTime.getTime();
       const now = Date.now();
       delaySeconds = Math.round((targetTime - now) / 1000);
       if (delaySeconds <= 0) {
@@ -119,7 +268,7 @@ export const ManagementPage = () => {
         '6h': '6 hours',
       };
       const message = restartOption === 'custom'
-        ? `Server restart scheduled for ${customTime}`
+        ? `Server restart scheduled for ${formatDateTimeForToast(customTime)}`
         : restartOption === 'now'
           ? 'Server restart initiated now'
           : `Server restart scheduled in ${labelMap[restartOption]}`;
@@ -128,8 +277,67 @@ export const ManagementPage = () => {
       toast.error(err instanceof Error ? err.message : 'Failed to schedule restart');
     }
 
-    setCustomTime('');
+    setCustomTime(null);
     setRestartOption('5m');
+  };
+
+  const handleScheduleStop = async () => {
+    if (!activeServer) return;
+
+    let delaySeconds = 0;
+    const delayMap: Record<Exclude<StopOption, 'custom'>, number> = {
+      '5m': 300,
+      '30m': 1800,
+      '1h': 3600,
+      '3h': 10800,
+      '6h': 21600,
+    };
+
+    if (stopOption === 'custom') {
+      if (!customStopTime) {
+        toast.error("Please select a time");
+        return;
+      }
+      const targetTime = customStopTime.getTime();
+      const now = Date.now();
+      delaySeconds = Math.round((targetTime - now) / 1000);
+      if (delaySeconds <= 0) {
+        toast.error("Selected time must be in the future");
+        return;
+      }
+    } else {
+      delaySeconds = delayMap[stopOption];
+    }
+
+    setIsStopModalOpen(false);
+
+    try {
+      const res = await fetch(`/api/servers/${activeServer.id}/schedule-stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ delaySeconds }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to schedule stop');
+      }
+      const labelMap: Record<Exclude<StopOption, 'custom'>, string> = {
+        '5m': '5 minutes',
+        '30m': '30 minutes',
+        '1h': '1 hour',
+        '3h': '3 hours',
+        '6h': '6 hours',
+      };
+      const message = stopOption === 'custom'
+        ? `Server stop scheduled for ${formatDateTimeForToast(customStopTime)}`
+        : `Server stop scheduled in ${labelMap[stopOption]}`;
+      toast.success(message);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to schedule stop');
+    }
+
+    setCustomStopTime(null);
+    setStopOption('5m');
   };
 
   const handleSafeMode = async () => {
@@ -272,18 +480,24 @@ export const ManagementPage = () => {
              </button>
            ) : (
              <>
-               <button
-                 onClick={async () => {
-                   try { await stopServer(activeServer.id); toast.success('Server stopping...'); }
-                   catch (err) { toast.error(err instanceof Error ? err.message : 'Failed to stop'); }
-                 }}
+	               <button
+	                 onClick={async () => {
+	                   try { await stopServer(activeServer.id); toast.success('Server stopping...'); }
+	                   catch (err) { toast.error(err instanceof Error ? err.message : 'Failed to stop'); }
+	                 }}
                  className="flex items-center gap-2 px-4 py-2 bg-[#2a2a29] border border-[#404040] hover:bg-[#333] text-gray-200 rounded font-medium transition-colors"
-               >
-                 <Square size={18} fill="currentColor" /> Stop
-               </button>
-               <button 
-                 onClick={() => setIsKillModalOpen(true)}
-                 className="flex items-center gap-2 px-3 py-2 bg-red-900/20 border border-red-900/50 hover:bg-red-900/40 text-red-400 rounded font-medium transition-colors"
+	               >
+	                 <Square size={18} fill="currentColor" /> Stop
+	               </button>
+	               <button
+	                 onClick={() => setIsStopModalOpen(true)}
+	                 className="flex items-center gap-2 px-4 py-2 bg-[#2a2a29] border border-[#404040] hover:bg-[#333] text-gray-200 rounded font-medium transition-colors"
+	               >
+	                 <Clock size={18} /> Schedule Stop
+	               </button>
+	               <button 
+	                 onClick={() => setIsKillModalOpen(true)}
+	                 className="flex items-center gap-2 px-3 py-2 bg-red-900/20 border border-red-900/50 hover:bg-red-900/40 text-red-400 rounded font-medium transition-colors"
                >
                  <AlertOctagon size={18} /> Kill
                </button>
@@ -558,13 +772,8 @@ export const ManagementPage = () => {
                       transition={{ duration: 0.22, ease: 'easeOut' }}
                       className="overflow-hidden"
                     >
-                      <label className="block text-sm text-gray-400 mb-2">Select Time:</label>
-                      <input 
-                        type="datetime-local" 
-                        value={customTime}
-                        onChange={(e) => setCustomTime(e.target.value)}
-                        className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B]"
-                      />
+	                      <label className="block text-sm text-gray-400 mb-2">Select Time:</label>
+                        <DateTimePopover value={customTime} onChange={setCustomTime} />
                     </motion.div>
                   )}
                 </AnimatePresence>
@@ -579,6 +788,71 @@ export const ManagementPage = () => {
                 </button>
                 <button 
                   onClick={handleScheduleRestart} 
+                  className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold shadow-lg shadow-[#E5B80B]/20"
+                >
+                  Confirm
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Schedule Stop Modal */}
+      <AnimatePresence>
+        {isStopModalOpen && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-sm bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6"
+            >
+              <div className="flex items-center gap-3 text-white mb-6">
+	                <CalendarIcon className="text-[#E5B80B]" size={24} />
+                <h3 className="text-xl font-bold">Schedule Stop</h3>
+              </div>
+
+              <div className="space-y-4 mb-6">
+                <label className="block text-sm text-gray-400">Server will stop:</label>
+                <select
+                  value={stopOption}
+                  onChange={(e) => setStopOption(e.target.value as StopOption)}
+                  className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B] focus:ring-1 focus:ring-[#E5B80B]"
+                >
+                  <option value="5m">In 5 minutes</option>
+                  <option value="30m">In 30 minutes</option>
+                  <option value="1h">In 1 hour</option>
+                  <option value="3h">In 3 hours</option>
+                  <option value="6h">In 6 hours</option>
+                  <option value="custom">Custom Time</option>
+                </select>
+
+                <AnimatePresence initial={false}>
+                  {stopOption === 'custom' && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0, y: -4 }}
+                      animate={{ opacity: 1, height: 'auto', y: 0 }}
+                      exit={{ opacity: 0, height: 0, y: -4 }}
+                      transition={{ duration: 0.22, ease: 'easeOut' }}
+                      className="overflow-hidden"
+                    >
+	                      <label className="block text-sm text-gray-400 mb-2">Select Time:</label>
+                        <DateTimePopover value={customStopTime} onChange={setCustomStopTime} />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={() => setIsStopModalOpen(false)}
+                  className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleScheduleStop}
                   className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold shadow-lg shadow-[#E5B80B]/20"
                 >
                   Confirm

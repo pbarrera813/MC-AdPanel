@@ -14,6 +14,32 @@ export const PlayerList = ({ server }: PlayerListProps) => {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('');
   const [pingStatus, setPingStatus] = useState<'supported' | 'missing_pingplayer' | 'missing_pingplayer_mod' | 'unsupported_server_type'>('supported');
+  const [pollMs, setPollMs] = useState(4000);
+  const [dataStale, setDataStale] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    const loadPollSettings = async () => {
+      try {
+        const res = await fetch('/api/settings');
+        if (!res.ok) return;
+        const data = await res.json();
+        const uiPollSeconds = Math.max(
+          2,
+          Number(data.playerSyncInterval || 0) || Number(data.statusPollInterval || 0) || 3
+        );
+        if (mounted) {
+          setPollMs(uiPollSeconds * 1000);
+        }
+      } catch {
+        // Keep default interval when settings cannot be loaded.
+      }
+    };
+    loadPollSettings();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const fetchPlayers = useCallback(async () => {
     try {
@@ -23,8 +49,10 @@ export const PlayerList = ({ server }: PlayerListProps) => {
       if (Array.isArray(data)) {
         setPlayers(data);
         setPingStatus('supported');
+        setDataStale(false);
       } else {
         setPlayers(data.players || []);
+        setDataStale(Boolean(data.dataStale));
         if (data.pingSupported) {
           setPingStatus('supported');
         } else if (data.pingStatus === 'unsupported_server_type') {
@@ -54,9 +82,9 @@ export const PlayerList = ({ server }: PlayerListProps) => {
       return;
     }
     fetchPlayers();
-    const interval = setInterval(fetchPlayers, 2000);
+    const interval = setInterval(fetchPlayers, pollMs);
     return () => clearInterval(interval);
-  }, [server.type, server.status, fetchPlayers]);
+  }, [server.type, server.status, fetchPlayers, pollMs]);
 
   if (server.type === 'Velocity') {
     return (
@@ -141,6 +169,7 @@ export const PlayerList = ({ server }: PlayerListProps) => {
         <div className="text-sm text-gray-400">
           Online: <span className="text-white font-bold">{players.length}</span>
           <span className="text-gray-500">/{server.maxPlayers}</span>
+          {dataStale && <span className="ml-2 text-amber-400 text-xs">Syncing...</span>}
         </div>
       </div>
 
@@ -188,7 +217,7 @@ export const PlayerList = ({ server }: PlayerListProps) => {
                       <div className="font-bold">{player.name}</div>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-gray-400 hidden md:table-cell font-mono">{player.ip}</td>
+                  <td className="px-4 py-3 text-gray-400 hidden md:table-cell font-mono">{player.ip || '-'}</td>
                   <td className="px-4 py-3 hidden lg:table-cell">
                     {pingStatus === 'supported' ? (
                       <div className={clsx("flex items-center gap-1.5 font-mono", getPingColor(player.ping))}>

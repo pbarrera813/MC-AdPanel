@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import clsx from 'clsx';
-import { Tooltip, TooltipTrigger, TooltipContent } from '../components/ui/tooltip';
 
 export const SystemSettingsPage = () => {
   const [loginUser, setLoginUser] = useState('mcpanel');
@@ -12,6 +11,9 @@ export const SystemSettingsPage = () => {
   const [defaultMaxRam, setDefaultMaxRam] = useState('1');
   const [defaultFlags, setDefaultFlags] = useState('none');
   const [statusPollInterval, setStatusPollInterval] = useState('3');
+  const [tpsPollInterval, setTpsPollInterval] = useState('30');
+  const [playerSyncInterval, setPlayerSyncInterval] = useState('15');
+  const [pingPollInterval, setPingPollInterval] = useState('20');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -29,6 +31,9 @@ export const SystemSettingsPage = () => {
           setDefaultMaxRam(data.defaultMaxRam || '1');
           setDefaultFlags(data.defaultFlags || 'none');
           setStatusPollInterval(String(data.statusPollInterval || 3));
+          setTpsPollInterval(String(data.tpsPollInterval || 30));
+          setPlayerSyncInterval(String(data.playerSyncInterval || 15));
+          setPingPollInterval(String(data.pingPollInterval || 20));
         }
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Failed to load settings');
@@ -57,6 +62,21 @@ export const SystemSettingsPage = () => {
       toast.error('Insert a valid value.');
       return;
     }
+    const parsedTpsPoll = parseInt(String(tpsPollInterval), 10);
+    if (isNaN(parsedTpsPoll) || parsedTpsPoll < 5 || parsedTpsPoll > 300) {
+      toast.error('TPS poll interval must be between 5 and 300 seconds.');
+      return;
+    }
+    const parsedPlayerSync = parseInt(String(playerSyncInterval), 10);
+    if (isNaN(parsedPlayerSync) || parsedPlayerSync < 2 || parsedPlayerSync > 300) {
+      toast.error('Player sync interval must be between 2 and 300 seconds.');
+      return;
+    }
+    const parsedPingPoll = parseInt(String(pingPollInterval), 10);
+    if (isNaN(parsedPingPoll) || parsedPingPoll < 5 || parsedPingPoll > 300) {
+      toast.error('Ping poll interval must be between 5 and 300 seconds.');
+      return;
+    }
 
     setSaving(true);
     try {
@@ -71,6 +91,9 @@ export const SystemSettingsPage = () => {
           defaultMaxRam,
           defaultFlags,
           statusPollInterval: pollInterval,
+          tpsPollInterval: parsedTpsPoll,
+          playerSyncInterval: parsedPlayerSync,
+          pingPollInterval: parsedPingPoll,
         }),
       });
       if (!res.ok) {
@@ -131,28 +154,6 @@ export const SystemSettingsPage = () => {
             <p className="text-xs text-gray-500 mt-2">These credentials are required to access the panel after restart.</p>
             <p className="text-xs text-gray-500 mt-1">Username must be between 4 and 12 characters.</p>
             <p className="text-xs text-gray-500 mt-1">If setting a new password, minimum length is 4 characters.</p>
-
-            {/* User-Agent */}
-            <hr className="border-[#3a3a3a] my-6" />
-            <label className="block text-sm text-gray-400 mb-2">User-Agent for downloads</label>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <input
-                  type="text"
-                  value={userAgent}
-                  onChange={(e) => setUserAgent(e.target.value)}
-                  placeholder="Orexa-Panel/1.0 (+https://github.com/pbarrera813/Orexa-Panel)"
-                  className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B]"
-                  disabled={saving}
-                />
-              </TooltipTrigger>
-              <TooltipContent className="bg-[#252524] border border-[#3a3a3a] px-3 py-1.5 text-gray-300 text-xs">
-                Don't touch if you don't know what this is.
-              </TooltipContent>
-            </Tooltip>
-            <p className="text-xs text-gray-500 mt-2">
-              Some upstream APIs require a contact User-Agent. This value is used for all version and jar downloads.
-            </p>
 
             {/* Default RAM */}
             <hr className="border-[#3a3a3a] my-6" />
@@ -225,6 +226,49 @@ export const SystemSettingsPage = () => {
               disabled={saving}
             />
             <p className="text-xs text-gray-500 mt-2">How often the panel polls for server status updates (1-30 seconds). Lower values = more responsive, higher values = less network traffic.</p>
+
+            {/* Live Data Polling Intervals */}
+            <hr className="border-[#3a3a3a] my-6" />
+            <label className="block text-sm text-gray-400 mb-3">Live Data Polling (seconds)</label>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">TPS Poll</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={tpsPollInterval}
+                  onChange={(e) => setTpsPollInterval(e.target.value)}
+                  pattern="\d*"
+                  className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B]"
+                  disabled={saving}
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Player Sync</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={playerSyncInterval}
+                  onChange={(e) => setPlayerSyncInterval(e.target.value)}
+                  pattern="\d*"
+                  className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B]"
+                  disabled={saving}
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Ping Poll</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={pingPollInterval}
+                  onChange={(e) => setPingPollInterval(e.target.value)}
+                  pattern="\d*"
+                  className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B]"
+                  disabled={saving}
+                />
+              </div>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">Hybrid model: event-driven parsing stays active, these intervals control fallback polling for TPS, players and ping consistency.</p>
 
             {/* Save Button */}
             <div className="flex justify-end mt-8">
