@@ -18,6 +18,13 @@ interface UploadConflictPayload {
   name?: string;
 }
 
+class DuplicateInstalledError extends Error {
+  constructor() {
+    super('already_installed');
+    this.name = 'DuplicateInstalledError';
+  }
+}
+
 class UploadConflictError extends Error {
   fileName: string;
 
@@ -67,6 +74,7 @@ export const PluginsPage = () => {
   const [savingSourceFor, setSavingSourceFor] = useState<string | null>(null);
   const [editingSources, setEditingSources] = useState<Set<string>>(new Set());
   const [uploadConflict, setUploadConflict] = useState<UploadConflictState | null>(null);
+  const [duplicateInstalledModalOpen, setDuplicateInstalledModalOpen] = useState(false);
   const uploadConflictResolverRef = useRef<((action: Exclude<UploadConflictAction, 'prompt'>) => void) | null>(null);
 
   const isServerOff = activeServer?.status === 'Stopped' || activeServer?.status === 'Crashed' || activeServer?.status === 'Error';
@@ -121,6 +129,7 @@ export const PluginsPage = () => {
   useEscapeKey(restartPromptOpen, () => { setRestartPromptOpen(false); setPendingUpdate(null); });
   useEscapeKey(updateAllPromptOpen, () => setUpdateAllPromptOpen(false));
   useEscapeKey(sourceConfirmOpen, () => { setSourceConfirmOpen(false); setPendingSource(null); });
+  useEscapeKey(duplicateInstalledModalOpen, () => setDuplicateInstalledModalOpen(false));
 
   const fetchUpdateResults = useCallback(async () => {
     if (!activeServerId) return [];
@@ -252,6 +261,9 @@ export const PluginsPage = () => {
       if (payload?.error === 'file_exists') {
         throw new UploadConflictError(payload.name || file.name);
       }
+      if (payload?.error === 'already_installed') {
+        throw new DuplicateInstalledError();
+      }
     }
 
     const data = await res.json().catch(() => ({} as { error?: string; status?: string }));
@@ -287,6 +299,10 @@ export const PluginsPage = () => {
             }
             break;
           } catch (err) {
+            if (err instanceof DuplicateInstalledError) {
+              setDuplicateInstalledModalOpen(true);
+              throw err;
+            }
             if (err instanceof UploadConflictError) {
               const choice = await requestConflictAction(err.fileName);
               uploadConflictResolverRef.current = null;
@@ -312,6 +328,9 @@ export const PluginsPage = () => {
       setIsUploadModalOpen(false);
       fetchPlugins();
     } catch (err) {
+      if (err instanceof DuplicateInstalledError) {
+        return;
+      }
       toast.error(err instanceof Error ? err.message : 'Upload failed');
     } finally {
       if (uploadConflictResolverRef.current) {
@@ -989,6 +1008,32 @@ export const PluginsPage = () => {
                   className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold"
                 >
                   Replace
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {duplicateInstalledModalOpen && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-md bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6"
+            >
+              <h3 className="text-xl font-bold text-white mb-3">Already Installed</h3>
+              <p className="text-gray-300 mb-6">
+                That {itemLabel} is already installed!
+              </p>
+              <div className="flex justify-end">
+                <button
+                  onClick={() => setDuplicateInstalledModalOpen(false)}
+                  className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold"
+                >
+                  OK
                 </button>
               </div>
             </motion.div>

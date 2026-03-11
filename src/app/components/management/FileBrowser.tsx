@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import clsx from 'clsx';
 import { toast } from 'sonner';
 import { useEscapeKey } from '../../hooks/useEscapeKey';
+import { Checkbox } from '../ui/checkbox';
 
 interface FileBrowserProps {
   server: Server;
@@ -26,6 +27,12 @@ interface UploadConflictPayload {
   name?: string;
   path?: string;
 }
+
+interface UploadResponsePayload extends UploadConflictPayload {
+  status?: string;
+}
+
+type UploadResultStatus = 'uploaded' | 'replaced' | 'skipped';
 
 class UploadConflictError extends Error {
   fileName: string;
@@ -180,6 +187,7 @@ const renderSyntaxLine = (line: string, language: EditorLanguage): React.ReactNo
 };
 
 export const FileBrowser = ({ server }: FileBrowserProps) => {
+  const indentUnit = '    ';
   const [currentPath, setCurrentPath] = useState('.');
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -195,28 +203,45 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadTotalItems, setUploadTotalItems] = useState(0);
   const [uploadConflict, setUploadConflict] = useState<UploadConflictState | null>(null);
+  const [applyConflictActionToAll, setApplyConflictActionToAll] = useState(false);
   const [saving, setSaving] = useState(false);
   const [isEditorMaximized, setIsEditorMaximized] = useState(false);
   const [editorSearch, setEditorSearch] = useState('');
   const [activeSearchMatch, setActiveSearchMatch] = useState(0);
   const [folderSearch, setFolderSearch] = useState('');
   const [downloading, setDownloading] = useState(false);
-  const [newlyUploaded, setNewlyUploaded] = useState<Set<string>>(new Set());
+  const [recentUploadResults, setRecentUploadResults] = useState<Map<string, UploadResultStatus>>(new Map());
   const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState('');
+  const [renameTargetType, setRenameTargetType] = useState<FileEntry['type']>('file');
   const [newName, setNewName] = useState('');
+  const [renameExtensionWarningOpen, setRenameExtensionWarningOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const uploadAbortRef = useRef<AbortController | null>(null);
   const uploadConflictResolverRef = useRef<((action: Exclude<UploadConflictAction, 'prompt'>) => void) | null>(null);
+  const uploadConflictBatchActionRef = useRef<Exclude<UploadConflictAction, 'prompt'> | null>(null);
   const editorTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
   const lineNumbersRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
+  const previousServerIdRef = useRef(server.id);
 
   const hasSelection = selectedNames.size > 0;
+  const isSwitchingServer = previousServerIdRef.current !== server.id;
+  const getRenameSelectionRange = useCallback((name: string, type: FileEntry['type']) => {
+    if (type !== 'file') return [0, name.length] as const;
+    const lastDot = name.lastIndexOf('.');
+    // Keep dotfiles (e.g. ".env") and extensionless names fully selected.
+    if (lastDot <= 0) return [0, name.length] as const;
+    return [0, lastDot] as const;
+  }, []);
 
   const fetchFiles = useCallback(async () => {
+    if (isSwitchingServer && currentPath !== '.') {
+      return;
+    }
     setLoading(true);
     try {
       const res = await fetch(`/api/servers/${server.id}/files?path=${encodeURIComponent(currentPath)}`);
@@ -229,13 +254,34 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
     } finally {
       setLoading(false);
     }
-  }, [server.id, currentPath]);
+  }, [server.id, currentPath, isSwitchingServer]);
+
+  useEffect(() => {
+    if (previousServerIdRef.current === server.id) return;
+    previousServerIdRef.current = server.id;
+    setCurrentPath('.');
+    setSelectedNames(new Set());
+    setRecentUploadResults(new Map());
+    setFolderSearch('');
+    setEditingFile(null);
+  }, [server.id]);
 
   useEffect(() => {
     fetchFiles();
     setSelectedNames(new Set());
-    setNewlyUploaded(new Set());
+    setRecentUploadResults(new Map());
   }, [fetchFiles]);
+
+  useEffect(() => {
+    if (!isRenameModalOpen) return;
+    requestAnimationFrame(() => {
+      const input = renameInputRef.current;
+      if (!input) return;
+      input.focus();
+      const [selectionStart, selectionEnd] = getRenameSelectionRange(renameTarget, renameTargetType);
+      input.setSelectionRange(selectionStart, selectionEnd);
+    });
+  }, [getRenameSelectionRange, isRenameModalOpen, renameTarget, renameTargetType]);
 
   useEscapeKey(!!editingFile, () => setEditingFile(null));
   useEscapeKey(isUploadModalOpen, () => setIsUploadModalOpen(false));
@@ -245,9 +291,17 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
       uploadConflictResolverRef.current = null;
     }
     setUploadConflict(null);
+    setApplyConflictActionToAll(false);
+    uploadConflictBatchActionRef.current = null;
   });
   useEscapeKey(isNewFolderModalOpen, () => setIsNewFolderModalOpen(false));
-  useEscapeKey(isRenameModalOpen, () => setIsRenameModalOpen(false));
+  useEscapeKey(isRenameModalOpen, () => {
+    if (renameExtensionWarningOpen) {
+      setRenameExtensionWarningOpen(false);
+      return;
+    }
+    setIsRenameModalOpen(false);
+  });
 
   const navigateTo = (name: string) => {
     const newPath = currentPath === '.' ? name : `${currentPath}/${name}`;
@@ -380,6 +434,13 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
 
     textarea.focus();
     textarea.setSelectionRange(targetIndex, targetIndex + term.length);
+  };
+
+  const updateEditorSelection = (target: HTMLTextAreaElement, start: number, end: number) => {
+    requestAnimationFrame(() => {
+      target.selectionStart = start;
+      target.selectionEnd = end;
+    });
   };
 
   const lineCount = React.useMemo(() => Math.max(1, editContent.split('\n').length), [editContent]);
@@ -550,35 +611,34 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
 
       xhr.onload = () => {
         signal.removeEventListener('abort', onAbort);
+        let payload: UploadResponsePayload | null = null;
+        try {
+          payload = JSON.parse(xhr.responseText) as UploadResponsePayload;
+        } catch {
+          payload = null;
+        }
         if (xhr.status === 409) {
-          try {
-            const payload = JSON.parse(xhr.responseText) as UploadConflictPayload;
-            if (payload?.error === 'file_exists') {
-              reject(new UploadConflictError(payload.name || item.file.name));
-              return;
-            }
-          } catch {
-            // ignore parse errors and fall through to generic error
+          if (payload?.error === 'file_exists') {
+            reject(new UploadConflictError(payload.name || item.file.name));
+            return;
           }
         }
         if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            const payload = JSON.parse(xhr.responseText) as { status?: string };
-            if (payload?.status === 'skipped') {
-              resolve('skipped');
-              return;
-            }
-            if (payload?.status === 'replaced') {
-              resolve('replaced');
-              return;
-            }
-          } catch {
-            // ignore parse errors and treat as uploaded
+          if (payload?.status === 'skipped') {
+            resolve('skipped');
+            return;
+          }
+          if (payload?.status === 'replaced') {
+            resolve('replaced');
+            return;
           }
           resolve('uploaded');
           return;
         }
-        reject(new Error(`Failed to upload ${item.relativePath || item.file.name}`));
+        const message = typeof payload?.error === 'string' && payload.error.trim()
+          ? payload.error
+          : `Failed to upload ${item.relativePath || item.file.name}`;
+        reject(new Error(message));
       };
 
       xhr.onerror = () => {
@@ -612,6 +672,10 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
 
   const requestConflictAction = (fileName: string) =>
     new Promise<Exclude<UploadConflictAction, 'prompt'>>((resolve) => {
+      if (uploadConflictBatchActionRef.current) {
+        resolve(uploadConflictBatchActionRef.current);
+        return;
+      }
       uploadConflictResolverRef.current = resolve;
       setUploadConflict({ name: fileName });
     });
@@ -621,6 +685,8 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
 
     const controller = new AbortController();
     uploadAbortRef.current = controller;
+    setApplyConflictActionToAll(false);
+    uploadConflictBatchActionRef.current = null;
     setIsUploading(true);
     setUploadProgress(0);
     setUploadTotalItems(items.length);
@@ -629,6 +695,15 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
     let uploadedBytes = 0;
     let uploadedCount = 0;
     let skippedCount = 0;
+    const uploadResultsByName = new Map<string, UploadResultStatus>();
+    const statusPriority: Record<UploadResultStatus, number> = { skipped: 0, replaced: 1, uploaded: 2 };
+    const trackUploadResult = (item: UploadItem, status: UploadResultStatus) => {
+      const topLevelName = item.relativePath.split('/')[0] || item.file.name;
+      const current = uploadResultsByName.get(topLevelName);
+      if (!current || statusPriority[status] >= statusPriority[current]) {
+        uploadResultsByName.set(topLevelName, status);
+      }
+    };
 
     try {
       for (const item of items) {
@@ -643,7 +718,11 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
           action = await requestConflictAction(item.relativePath || item.file.name);
           uploadConflictResolverRef.current = null;
           setUploadConflict(null);
+          if (applyConflictActionToAll) {
+            uploadConflictBatchActionRef.current = action;
+          }
           if (action === 'skip') {
+            trackUploadResult(item, 'skipped');
             skippedCount += 1;
             uploadedBytes += item.file.size || 1;
             const skippedProgress = Math.min(100, Math.round((uploadedBytes / totalBytes) * 100));
@@ -669,6 +748,9 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
               const choice = await requestConflictAction(err.fileName);
               uploadConflictResolverRef.current = null;
               setUploadConflict(null);
+              if (applyConflictActionToAll) {
+                uploadConflictBatchActionRef.current = choice;
+              }
               if (choice === 'skip') {
                 skippedByConflict = true;
                 break;
@@ -680,12 +762,14 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
           }
         }
         if (skippedByConflict) {
+          trackUploadResult(item, 'skipped');
           skippedCount += 1;
           uploadedBytes += item.file.size || 1;
           const skippedProgress = Math.min(100, Math.round((uploadedBytes / totalBytes) * 100));
           setUploadProgress(skippedProgress);
           continue;
         }
+        trackUploadResult(item, result);
         if (result === 'skipped') {
           skippedCount += 1;
         } else {
@@ -696,8 +780,7 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
         setUploadProgress(progress);
       }
 
-      const uploadedNames = new Set(items.map(item => item.relativePath.split('/')[0] || item.file.name));
-      setNewlyUploaded(uploadedNames);
+      setRecentUploadResults(uploadResultsByName);
       if (uploadedCount > 0 && skippedCount > 0) {
         toast.success(`Uploaded ${uploadedCount} item(s), skipped ${skippedCount}`);
       } else if (uploadedCount > 0) {
@@ -719,6 +802,8 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
         uploadConflictResolverRef.current = null;
       }
       setUploadConflict(null);
+      setApplyConflictActionToAll(false);
+      uploadConflictBatchActionRef.current = null;
       uploadAbortRef.current = null;
       setIsUploading(false);
       setUploadProgress(0);
@@ -806,6 +891,8 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
   const handleFileUpload = async (fileList: FileList | null) => {
     const items = toUploadItemsFromFileList(fileList);
     await handleUploadItems(items);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    if (folderInputRef.current) folderInputRef.current.value = '';
   };
 
   const handleDropUpload = async (e: React.DragEvent<HTMLDivElement>) => {
@@ -837,13 +924,30 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
     setIsUploadModalOpen(false);
   };
 
-  const openRenameModal = (name: string) => {
+  const openRenameModal = (name: string, type: FileEntry['type']) => {
     setRenameTarget(name);
+    setRenameTargetType(type);
     setNewName(name);
+    setRenameExtensionWarningOpen(false);
     setIsRenameModalOpen(true);
   };
 
-  const handleRename = async () => {
+  const extractFileExtension = (name: string): string => {
+    const trimmed = name.trim();
+    const lastDot = trimmed.lastIndexOf('.');
+    if (lastDot <= 0 || lastDot >= trimmed.length - 1) return '';
+    return trimmed.slice(lastDot + 1).toLowerCase();
+  };
+
+  const requiresExtensionWarning = () => {
+    if (renameTargetType !== 'file') return false;
+    const originalExt = extractFileExtension(renameTarget);
+    if (!originalExt) return false;
+    const nextExt = extractFileExtension(newName);
+    return originalExt !== nextExt;
+  };
+
+  const performRename = async () => {
     if (!renameTarget || !newName.trim() || newName === renameTarget) {
       setIsRenameModalOpen(false);
       return;
@@ -861,6 +965,7 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
         throw new Error(data.error || 'Failed to rename');
       }
       toast.success('Renamed successfully');
+      setRenameExtensionWarningOpen(false);
       setIsRenameModalOpen(false);
       setSelectedNames(new Set());
       fetchFiles();
@@ -871,10 +976,23 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
     }
   };
 
+  const handleRename = async () => {
+    if (!renameTarget || !newName.trim() || newName === renameTarget) {
+      setIsRenameModalOpen(false);
+      return;
+    }
+    if (requiresExtensionWarning()) {
+      setRenameExtensionWarningOpen(true);
+      return;
+    }
+    await performRename();
+  };
+
   const isTextFile = (name: string) =>
     /\.(txt|properties|json|log|yml|yaml|toml|cfg|conf|ini|xml|csv|md|sh|bat|secret)$/i.test(name);
 
   const serverDirName = server.name.replace(/\s+/g, '_');
+  const folderStatusLabel = hasSelection ? `${selectedNames.size} selected` : `${filteredEntries.length} found`;
 
   return (
     <div className="h-full min-h-0 overflow-hidden flex flex-col bg-[#1e1e1d] p-3 md:p-6 relative">
@@ -961,7 +1079,7 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
               className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded pl-7 pr-2 py-1.5 text-xs text-white focus:outline-none focus:border-[#E5B80B]"
             />
           </div>
-          <span className="text-[11px] text-gray-500 w-16 text-right">{filteredEntries.length} found</span>
+          <span className="text-[11px] text-gray-500 min-w-[88px] text-right">{folderStatusLabel}</span>
           <button
             onClick={() => setIsNewFolderModalOpen(true)}
             className="flex items-center gap-2 px-3 py-1.5 bg-[#252524] border border-[#3a3a3a] text-sm text-gray-300 rounded hover:bg-[#333] hover:text-white transition-colors"
@@ -1027,13 +1145,21 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
                 </span>
                 <span className="flex-1 truncate">
                   {highlightFolderMatch(entry.name)}
-                  {newlyUploaded.has(entry.name) && (
-                    <span className="ml-2 text-[#E5B80B] text-xs font-bold">New!</span>
-                  )}
+                  {(() => {
+                    const uploadStatus = recentUploadResults.get(entry.name);
+                    if (!uploadStatus) return null;
+                    if (uploadStatus === 'uploaded') {
+                      return <span className="ml-2 text-[#E5B80B] text-xs font-bold">New!</span>;
+                    }
+                    if (uploadStatus === 'replaced') {
+                      return <span className="ml-2 text-[#E5B80B] text-xs font-bold">Updated</span>;
+                    }
+                    return <span className="ml-2 text-gray-500 text-xs font-bold">Skipped</span>;
+                  })()}
                 </span>
                 {isSelected && selectedNames.size === 1 && (
                   <button
-                    onClick={(e) => { e.stopPropagation(); openRenameModal(entry.name); }}
+                    onClick={(e) => { e.stopPropagation(); openRenameModal(entry.name, entry.type); }}
                     className="flex-shrink-0 p-1 rounded text-gray-500 hover:text-[#E5B80B] hover:bg-[#2a2a29] transition-colors"
                     title="Rename"
                   >
@@ -1158,35 +1284,39 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
                       spellCheck={false}
                       autoCorrect="off"
                       autoCapitalize="off"
-                      onChange={(e) => setEditContent(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key !== 'Tab') return;
-                        e.preventDefault();
-                        const target = e.currentTarget;
-                        const { selectionStart, selectionEnd, value } = target;
-                        const indent = '\t';
-                        if (selectionStart === selectionEnd) {
-                          const next = value.slice(0, selectionStart) + indent + value.slice(selectionEnd);
-                          setEditContent(next);
-                          requestAnimationFrame(() => {
-                            target.selectionStart = selectionStart + indent.length;
-                            target.selectionEnd = selectionStart + indent.length;
-                          });
-                          return;
-                        }
+	                      onChange={(e) => setEditContent(e.target.value)}
+	                      onKeyDown={(e) => {
+	                        const target = e.currentTarget;
+	                        const { selectionStart, selectionEnd, value } = target;
+	                        if (e.key === 'Tab') {
+	                          e.preventDefault();
+	                          if (selectionStart === selectionEnd) {
+	                            const next = value.slice(0, selectionStart) + indentUnit + value.slice(selectionEnd);
+	                            setEditContent(next);
+	                            updateEditorSelection(target, selectionStart + indentUnit.length, selectionStart + indentUnit.length);
+	                            return;
+	                          }
 
-                        const selectedText = value.slice(selectionStart, selectionEnd);
-                        const lineStart = value.lastIndexOf('\n', selectionStart - 1) + 1;
-                        const selectedLines = value.slice(lineStart, selectionEnd);
-                        const indentedLines = selectedLines.replace(/^/gm, indent);
-                        const next = value.slice(0, lineStart) + indentedLines + value.slice(selectionEnd);
-                        setEditContent(next);
-                        const added = indentedLines.length - selectedLines.length;
-                        requestAnimationFrame(() => {
-                          target.selectionStart = selectionStart + indent.length;
-                          target.selectionEnd = selectionEnd + added;
-                        });
-                      }}
+	                          const lineStart = value.lastIndexOf('\n', selectionStart - 1) + 1;
+	                          const selectedLines = value.slice(lineStart, selectionEnd);
+	                          const indentedLines = selectedLines.replace(/^/gm, indentUnit);
+	                          const next = value.slice(0, lineStart) + indentedLines + value.slice(selectionEnd);
+	                          setEditContent(next);
+	                          const added = indentedLines.length - selectedLines.length;
+	                          updateEditorSelection(target, selectionStart + indentUnit.length, selectionEnd + added);
+	                          return;
+	                        }
+
+	                        if (e.key === 'Backspace' && selectionStart === selectionEnd) {
+	                          const beforeCursor = value.slice(0, selectionStart);
+	                          if (beforeCursor.endsWith(indentUnit)) {
+	                            e.preventDefault();
+	                            const next = value.slice(0, selectionStart - indentUnit.length) + value.slice(selectionEnd);
+	                            setEditContent(next);
+	                            updateEditorSelection(target, selectionStart - indentUnit.length, selectionStart - indentUnit.length);
+	                          }
+	                        }
+	                      }}
                       onScroll={(e) => {
                         if (lineNumbersRef.current) {
                           lineNumbersRef.current.scrollTop = e.currentTarget.scrollTop;
@@ -1258,7 +1388,7 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
                   />
                   <Upload size={32} className="mb-2" />
                   <p>Drag & drop files or folders here</p>
-                  <p className="text-xs text-gray-600 mt-2">click to choose files</p>
+                  <p className="text-xs text-gray-600 mt-2">Click to choose files, or use the folder button below</p>
                   <button
                     type="button"
                     onClick={(e) => {
@@ -1294,26 +1424,42 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
                       exit={{ y: 8, scale: 0.98 }}
                       className="w-full max-w-md bg-[#202020] border border-[#404040] rounded-lg p-4"
                     >
-                      <p className="text-sm text-gray-200">
-                        The destination already has a file named "{uploadConflict.name}".
-                      </p>
-                      <div className="mt-4 flex justify-end gap-2">
-                        <button
-                          onClick={() => {
-                            uploadConflictResolverRef.current?.('skip');
-                            uploadConflictResolverRef.current = null;
-                            setUploadConflict(null);
-                          }}
+	                      <p className="text-sm text-gray-200">
+	                        The destination already has a file named "{uploadConflict.name}".
+	                      </p>
+                        {uploadTotalItems > 1 && (
+                          <label className="mt-4 flex items-center gap-2 text-sm text-gray-300">
+                            <Checkbox
+                              checked={applyConflictActionToAll}
+                              onCheckedChange={(checked) => setApplyConflictActionToAll(checked === true)}
+                              className="size-4 !border-[#4a4a4a] !bg-[#111111] text-transparent data-[state=checked]:!bg-[#111111] data-[state=checked]:!text-[#E5B80B] data-[state=checked]:!border-[#E5B80B] focus-visible:ring-[#E5B80B]/35"
+                            />
+                            Apply the same instruction to all files?
+                          </label>
+                        )}
+	                      <div className="mt-4 flex justify-end gap-2">
+	                        <button
+	                          onClick={() => {
+	                            uploadConflictResolverRef.current?.('skip');
+	                            uploadConflictResolverRef.current = null;
+	                            setUploadConflict(null);
+                              if (applyConflictActionToAll) {
+                                uploadConflictBatchActionRef.current = 'skip';
+                              }
+	                          }}
                           className="px-3 py-1.5 bg-[#333] hover:bg-[#404040] text-gray-200 rounded text-sm"
                         >
                           Skip
                         </button>
-                        <button
-                          onClick={() => {
-                            uploadConflictResolverRef.current?.('replace');
-                            uploadConflictResolverRef.current = null;
-                            setUploadConflict(null);
-                          }}
+	                        <button
+	                          onClick={() => {
+	                            uploadConflictResolverRef.current?.('replace');
+	                            uploadConflictResolverRef.current = null;
+	                            setUploadConflict(null);
+                              if (applyConflictActionToAll) {
+                                uploadConflictBatchActionRef.current = 'replace';
+                              }
+	                          }}
                           className="px-3 py-1.5 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded text-sm font-bold"
                         >
                           Replace
@@ -1336,7 +1482,7 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6"
+              className="relative w-full max-w-md bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6"
             >
               <h3 className="text-xl font-bold text-white mb-4">Create New Folder</h3>
               <div className="mb-6">
@@ -1383,9 +1529,10 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
               <div className="mb-6">
                 <label className="block text-sm text-gray-400 mb-2">New Name</label>
                 <input
-                  type="text"
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
+	                  ref={renameInputRef}
+	                  type="text"
+	                  value={newName}
+	                  onChange={(e) => setNewName(e.target.value)}
                   className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B] focus:ring-1 focus:ring-[#E5B80B]"
                   autoFocus
                   onKeyDown={(e) => e.key === 'Enter' && handleRename()}
@@ -1394,7 +1541,10 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
               </div>
               <div className="flex justify-end gap-3">
                 <button
-                  onClick={() => setIsRenameModalOpen(false)}
+                  onClick={() => {
+                    setRenameExtensionWarningOpen(false);
+                    setIsRenameModalOpen(false);
+                  }}
                   className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
                   disabled={renaming}
                 >
@@ -1408,6 +1558,44 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
                   {renaming ? 'Renaming...' : 'Rename'}
                 </button>
               </div>
+
+              <AnimatePresence>
+                {renameExtensionWarningOpen && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="absolute inset-0 z-10 bg-black/55 backdrop-blur-[1px] rounded-lg flex items-center justify-center p-4"
+                  >
+                    <motion.div
+                      initial={{ y: 8, scale: 0.98 }}
+                      animate={{ y: 0, scale: 1 }}
+                      exit={{ y: 8, scale: 0.98 }}
+                      className="w-full max-w-md bg-[#202020] border border-[#404040] rounded-lg p-4"
+                    >
+                      <p className="text-sm text-gray-200">
+                        Careful! changing the extension can lead to errors on your server.
+                      </p>
+                      <div className="mt-4 flex justify-end gap-2">
+                        <button
+                          onClick={() => setRenameExtensionWarningOpen(false)}
+                          className="px-3 py-1.5 bg-[#333] hover:bg-[#404040] text-gray-200 rounded text-sm"
+                          disabled={renaming}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={performRename}
+                          className="px-3 py-1.5 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded text-sm font-bold"
+                          disabled={renaming}
+                        >
+                          Accept
+                        </button>
+                      </div>
+                    </motion.div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </motion.div>
           </div>
         )}
