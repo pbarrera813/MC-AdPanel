@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useServer } from '../context/ServerContext';
-import { FileText, AlertTriangle, Download, Copy, Trash2, Search, Filter, Pause, Play, Check, Square } from 'lucide-react';
+import { FileText, AlertTriangle, Download, Copy, Trash2, Search, Filter, Pause, Play, Check, Square, ChevronsDown } from 'lucide-react';
 import { clsx } from 'clsx';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
@@ -49,7 +49,7 @@ export const LogsPage = () => {
   const [activeTab, setActiveTab] = useState<LogTab>('live');
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 bg-[#1e1e1d]">
+    <div className="flex-1 h-full flex flex-col min-h-0 overflow-hidden bg-[#1e1e1d]">
       <div className="bg-[#252524] border-b border-[#3a3a3a] px-4 md:px-6 py-4 flex flex-col md:flex-row md:justify-between md:items-center gap-3">
         <h2 className="text-xl font-bold text-white">Logs</h2>
         <div className="relative flex bg-[#1a1a1a] rounded p-1 border border-[#333]">
@@ -82,7 +82,7 @@ export const LogsPage = () => {
         </div>
       </div>
 
-      <div className="flex-1 overflow-hidden min-h-0">
+      <div className="flex-1 h-0 overflow-hidden min-h-0">
         {activeTab === 'live' ? <LiveLogs /> : <CrashReports />}
       </div>
     </div>
@@ -101,6 +101,56 @@ interface ServerFile {
   type: string;
   size: string;
   modTime: string;
+}
+
+const ANSI_COLOR_CODE_REGEX = /\x1b\[[0-9;]*m/g;
+const MC_COLOR_CODE_REGEX = /(?:\u00C2)?\u00A7[0-9a-fk-or]/gi;
+const CONTINUATION_LINE_REGEX = /^\s*(at\s|Caused by:|Suppressed:|\.{3}\s+\d+\s+more|[a-zA-Z0-9_.$]+(?:Exception|Error))/;
+
+function parseConsoleLine(line: string, id: number, previousType?: string): ParsedLog {
+  const cleanLine = line.replace(ANSI_COLOR_CODE_REGEX, '').replace(MC_COLOR_CODE_REGEX, '');
+  let match = cleanLine.match(/\[(\d{2}:\d{2}:\d{2})\]\s*\[.*?\/(INFO|WARN(?:ING)?|ERROR|FATAL|SEVERE)\]:?\s*(.*)/i);
+  if (!match) {
+    match = cleanLine.match(/\[(?:\w+\s+)?(\d{2}:\d{2}:\d{2})\s+(INFO|WARN(?:ING)?|ERROR|FATAL|SEVERE)[^\]]*\]\s*(.*)/i);
+  }
+
+  let logType = 'INFO';
+  if (match) {
+    const raw = match[2].toUpperCase();
+    if (raw === 'WARNING') logType = 'WARN';
+    else if (raw === 'SEVERE' || raw === 'FATAL') logType = 'ERROR';
+    else logType = raw;
+  } else {
+    if (/\b(ERROR|FATAL|SEVERE)\b/i.test(cleanLine)) {
+      logType = 'ERROR';
+    } else if (/\bWARN(?:ING)?\b/i.test(cleanLine)) {
+      logType = 'WARN';
+    }
+    if (
+      logType === 'INFO' &&
+      (previousType === 'WARN' || previousType === 'ERROR') &&
+      CONTINUATION_LINE_REGEX.test(cleanLine)
+    ) {
+      logType = previousType;
+    }
+  }
+
+  let displayTime: string;
+  if (match) {
+    const [hh, mm, ss] = match[1].split(':').map(Number);
+    const now = new Date();
+    const utcDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hh, mm, ss));
+    displayTime = utcDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+  } else {
+    displayTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+  }
+
+  return {
+    id,
+    time: displayTime,
+    type: logType,
+    msg: match ? match[3] : cleanLine,
+  };
 }
 
 // StoredLogs: shows files under /logs and allows one-click select + double-click open
@@ -323,7 +373,7 @@ const StoredLogs = ({ serverId }: { serverId: string }) => {
 }
 
 const LiveLogs = () => {
-  const { activeServer } = useServer();
+  const { activeServer, refreshServers } = useServer();
 
   // When server is not running, show stored logs (one-click select, double-click open)
   if (!activeServer) return <div className="flex-1 p-4 text-gray-500">No server selected</div>;
@@ -333,17 +383,24 @@ const LiveLogs = () => {
 
   const [filterLevel, setFilterLevel] = useState<string | null>(null);
   const [isPaused, setIsPaused] = useState(false);
+  const [autoScroll, setAutoScroll] = useState(true);
   const [search, setSearch] = useState('');
   const [logs, setLogs] = useState<ParsedLog[]>([]);
   const [connected, setConnected] = useState(false);
   const logIdRef = useRef(0);
+  const isPausedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     setLogs([]);
     logIdRef.current = 0;
+    setAutoScroll(true);
   }, [activeServer?.id]);
+
+  useEffect(() => {
+    isPausedRef.current = isPaused;
+  }, [isPaused]);
 
   // WebSocket connection for live logs
   useEffect(() => {
@@ -361,50 +418,33 @@ const LiveLogs = () => {
     ws.onopen = () => setConnected(true);
 
     ws.onmessage = (event) => {
-      if (isPaused) return;
-
       try {
-        const data = JSON.parse(event.data);
+        const data = JSON.parse(event.data) as {
+          type?: string;
+          line?: unknown;
+          entries?: Array<{ line?: unknown }>;
+        };
+
+        if (data.type === 'snapshot') {
+          const entries = Array.isArray(data.entries) ? data.entries : [];
+          const parsedSnapshot = entries
+            .map((entry) => (typeof entry?.line === 'string' ? entry.line : null))
+            .filter((line): line is string => line !== null)
+            .reduce<ParsedLog[]>((acc, line) => {
+              const previousType = acc.length > 0 ? acc[acc.length - 1].type : undefined;
+              acc.push(parseConsoleLine(line, logIdRef.current++, previousType));
+              return acc;
+            }, []);
+          setLogs(parsedSnapshot);
+          return;
+        }
+
         if (data.type === 'log') {
-          const line = data.line as string;
-          // Strip ANSI escape codes and Minecraft color codes for parsing
-          const cleanLine = line.replace(/\x1b\[[0-9;]*m/g, '').replace(/§[0-9a-fk-or]/gi, '');
-          // Parse Minecraft log format - supports multiple formats:
-          // Format A: [HH:MM:SS] [Thread/LEVEL]: message (modern Paper/Spigot)
-          // Format B: [Day HH:MM:SS LEVEL] message or [HH:MM:SS LEVEL Source] message
-          let match = cleanLine.match(/\[(\d{2}:\d{2}:\d{2})\]\s*\[.*?\/(INFO|WARN(?:ING)?|ERROR|FATAL|SEVERE)\]:?\s*(.*)/i);
-          if (!match) {
-            match = cleanLine.match(/\[(?:\w+\s+)?(\d{2}:\d{2}:\d{2})\s+(INFO|WARN(?:ING)?|ERROR|FATAL|SEVERE)[^\]]*\]\s*(.*)/i);
-          }
-          let logType = 'INFO';
-          if (match) {
-            const raw = match[2].toUpperCase();
-            if (raw === 'WARNING') logType = 'WARN';
-            else if (raw === 'SEVERE' || raw === 'FATAL') logType = 'ERROR';
-            else logType = raw;
-          }
-
-          // Convert server timestamp (UTC) to local time
-          let displayTime: string;
-          if (match) {
-            const [hh, mm, ss] = match[1].split(':').map(Number);
-            const now = new Date();
-            const utcDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hh, mm, ss));
-            displayTime = utcDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
-          } else {
-            displayTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
-          }
-
-          const parsed: ParsedLog = {
-            id: logIdRef.current++,
-            time: displayTime,
-            type: logType,
-            msg: match ? match[3] : cleanLine,
-          };
-
-          setLogs(prev => {
-            const newLogs = [...prev, parsed];
-            return newLogs;
+          if (isPausedRef.current) return;
+          if (typeof data.line !== 'string') return;
+          setLogs((prev) => {
+            const previousType = prev.length > 0 ? prev[prev.length - 1].type : undefined;
+            return [...prev, parseConsoleLine(data.line, logIdRef.current++, previousType)];
           });
         }
       } catch {
@@ -412,21 +452,27 @@ const LiveLogs = () => {
       }
     };
 
-    ws.onclose = () => setConnected(false);
-    ws.onerror = () => setConnected(false);
+    ws.onclose = () => {
+      setConnected(false);
+      refreshServers().catch(() => {});
+    };
+    ws.onerror = () => {
+      setConnected(false);
+      refreshServers().catch(() => {});
+    };
 
     return () => {
       ws.close();
       wsRef.current = null;
     };
-  }, [activeServer?.id, activeServer?.status, isPaused]);
+  }, [activeServer?.id, activeServer?.status, refreshServers]);
 
   // Auto-scroll
   useEffect(() => {
-    if (!isPaused && scrollRef.current) {
+    if (!isPaused && autoScroll && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [logs, isPaused]);
+  }, [logs, isPaused, autoScroll]);
 
   const filteredLogs = logs.filter(l =>
     (!filterLevel || l.type === filterLevel) &&
@@ -434,7 +480,8 @@ const LiveLogs = () => {
   );
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
+    <div className="flex-1 min-h-0 overflow-auto p-4 md:p-8">
+      <div className="mx-auto flex h-full min-h-[360px] max-h-[calc(100vh-220px)] w-full flex-col rounded-lg border border-[#3a3a3a] bg-[#202020] overflow-hidden">
       <div className="p-4 border-b border-[#3a3a3a] flex flex-wrap gap-4 items-center bg-[#202020]">
          <div className="relative flex-1 max-w-md">
            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
@@ -475,6 +522,20 @@ const LiveLogs = () => {
          </div>
 
          <div className="md:ml-auto">
+           {!autoScroll && (
+             <button
+               onClick={() => {
+                 setAutoScroll(true);
+                 if (scrollRef.current) {
+                   scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+                 }
+               }}
+               className="mr-2 inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#E5B80B] text-black rounded hover:bg-[#d4a90a] text-xs font-bold"
+             >
+               <ChevronsDown size={14} />
+               Jump to latest
+             </button>
+           )}
            <button
              onClick={() => setIsPaused(!isPaused)}
              className="flex items-center gap-2 px-3 py-1.5 bg-[#333] text-gray-300 rounded hover:bg-[#444] text-xs font-bold"
@@ -485,10 +546,22 @@ const LiveLogs = () => {
          </div>
       </div>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 font-mono text-xs space-y-1 bg-[#121212]">
+      <div
+        ref={scrollRef}
+        className="flex-1 h-0 min-h-0 overflow-y-auto overscroll-contain p-4 font-mono text-xs space-y-1 bg-[#121212] scrollbar-thin scrollbar-thumb-gray-700"
+        onScroll={(event) => {
+          const target = event.currentTarget;
+          const isAtBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 12;
+          if (!isAtBottom && autoScroll) {
+            setAutoScroll(false);
+          } else if (isAtBottom && !autoScroll) {
+            setAutoScroll(true);
+          }
+        }}
+      >
          {filteredLogs.length === 0 && (
            <div className="text-gray-500 text-center py-8">
-             {connected ? 'Waiting for log entries...' : 'No live logs — switch to stored logs below'}
+             {connected ? 'Waiting for log entries...' : 'Waiting for live log stream...'}
            </div>
          )}
          {filteredLogs.map((log) => (
@@ -501,11 +574,7 @@ const LiveLogs = () => {
              <span className="text-gray-300 break-all">{log.msg}</span>
            </div>
          ))}
-
-         {/* When not connected, show stored log files so user can inspect logs while server is off */}
-         {!connected && activeServer && (
-           <StoredLogs serverId={activeServer.id} />
-         )}
+      </div>
       </div>
     </div>
   );
@@ -657,7 +726,7 @@ const CrashReports = () => {
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <div className="flex-1 overflow-auto p-4 md:p-8">
+      <div className="flex-1 min-h-0 overflow-auto p-4 md:p-8">
         {selectedReports.size > 0 && (
           <div className="flex items-center gap-3 mb-4">
             <button
@@ -669,7 +738,7 @@ const CrashReports = () => {
             </button>
           </div>
         )}
-        <div className="bg-[#202020] border border-[#3a3a3a] rounded-lg overflow-auto max-h-[calc(100vh-220px)] scrollbar-thin scrollbar-thumb-gray-700">
+        <div className="bg-[#202020] border border-[#3a3a3a] rounded-lg min-h-0 overflow-auto max-h-[calc(100vh-220px)] scrollbar-thin scrollbar-thumb-gray-700">
           <div className="overflow-x-auto">
           <table className="w-full text-left min-w-[720px]">
             <thead className="bg-[#252524] text-gray-400 border-b border-[#3a3a3a]">

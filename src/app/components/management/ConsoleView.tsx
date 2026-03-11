@@ -244,11 +244,13 @@ export const ConsoleView = ({ server }: ConsoleViewProps) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const lastSeqRef = useRef(logs.length > 0 ? logs[logs.length - 1].seq : 0);
+  const previousStatusRef = useRef(server.status);
 
   useEffect(() => {
     const cached = consoleLogsCache.get(server.id);
     if (cached) {
       setLogs(cached);
+      previousStatusRef.current = server.status;
       return;
     }
     const persisted = loadPersistedConsoleLogs(server.id);
@@ -256,6 +258,7 @@ export const ConsoleView = ({ server }: ConsoleViewProps) => {
     setLogs(persisted);
     setAutoScroll(true);
     setInput('');
+    previousStatusRef.current = server.status;
   }, [server.id]);
 
   useEffect(() => {
@@ -263,6 +266,24 @@ export const ConsoleView = ({ server }: ConsoleViewProps) => {
     consoleLogsCache.set(server.id, logs);
     persistConsoleLogs(server.id, logs);
   }, [server.id, logs]);
+
+  useEffect(() => {
+    const previousStatus = previousStatusRef.current;
+    const isStartingNow =
+      (server.status === 'Booting' || server.status === 'Running') &&
+      previousStatus !== 'Booting' &&
+      previousStatus !== 'Running';
+
+    if (isStartingNow) {
+      setLogs([]);
+      lastSeqRef.current = 0;
+      consoleLogsCache.set(server.id, []);
+      persistConsoleLogs(server.id, []);
+      setAutoScroll(true);
+    }
+
+    previousStatusRef.current = server.status;
+  }, [server.id, server.status]);
 
   // WebSocket connection for real-time console logs
   useEffect(() => {
