@@ -19,6 +19,9 @@ type AppSettings struct {
 	DefaultMaxRAM      string `json:"defaultMaxRam,omitempty"`
 	DefaultFlags       string `json:"defaultFlags,omitempty"`
 	StatusPollInterval int    `json:"statusPollInterval,omitempty"`
+	TpsPollInterval    int    `json:"tpsPollInterval,omitempty"`
+	PlayerSyncInterval int    `json:"playerSyncInterval,omitempty"`
+	PingPollInterval   int    `json:"pingPollInterval,omitempty"`
 	LoginUser          string `json:"loginUser,omitempty"`
 	LoginPasswordHash  string `json:"loginPasswordHash,omitempty"`
 }
@@ -102,6 +105,36 @@ func applySettingsDefaults(cfg *AppSettings) {
 	}
 	if cfg.StatusPollInterval <= 0 {
 		cfg.StatusPollInterval = 3
+	}
+	if cfg.StatusPollInterval > 30 {
+		cfg.StatusPollInterval = 30
+	}
+	if cfg.TpsPollInterval <= 0 {
+		cfg.TpsPollInterval = 30
+	}
+	if cfg.TpsPollInterval < 5 {
+		cfg.TpsPollInterval = 5
+	}
+	if cfg.TpsPollInterval > 300 {
+		cfg.TpsPollInterval = 300
+	}
+	if cfg.PlayerSyncInterval <= 0 {
+		cfg.PlayerSyncInterval = 15
+	}
+	if cfg.PlayerSyncInterval < 2 {
+		cfg.PlayerSyncInterval = 2
+	}
+	if cfg.PlayerSyncInterval > 300 {
+		cfg.PlayerSyncInterval = 300
+	}
+	if cfg.PingPollInterval <= 0 {
+		cfg.PingPollInterval = 20
+	}
+	if cfg.PingPollInterval < 5 {
+		cfg.PingPollInterval = 5
+	}
+	if cfg.PingPollInterval > 300 {
+		cfg.PingPollInterval = 300
 	}
 	if strings.TrimSpace(cfg.LoginUser) == "" {
 		cfg.LoginUser = defaultLoginUser()
@@ -203,7 +236,18 @@ func (m *Manager) GetSettings() AppSettings {
 	return s
 }
 
-func (m *Manager) UpdateAppSettings(userAgent, defaultMinRAM, defaultMaxRAM, defaultFlags string, statusPollInterval int, loginUser, loginPassword string) (AppSettings, error) {
+func (m *Manager) UpdateAppSettings(
+	userAgent,
+	defaultMinRAM,
+	defaultMaxRAM,
+	defaultFlags string,
+	statusPollInterval,
+	tpsPollInterval,
+	playerSyncInterval,
+	pingPollInterval int,
+	loginUser,
+	loginPassword string,
+) (AppSettings, error) {
 	m.settingsMu.Lock()
 	defer m.settingsMu.Unlock()
 
@@ -217,6 +261,33 @@ func (m *Manager) UpdateAppSettings(userAgent, defaultMinRAM, defaultMaxRAM, def
 	}
 	if statusPollInterval > 30 {
 		statusPollInterval = 30
+	}
+	if tpsPollInterval <= 0 {
+		tpsPollInterval = 30
+	}
+	if tpsPollInterval < 5 {
+		tpsPollInterval = 5
+	}
+	if tpsPollInterval > 300 {
+		tpsPollInterval = 300
+	}
+	if playerSyncInterval <= 0 {
+		playerSyncInterval = 15
+	}
+	if playerSyncInterval < 2 {
+		playerSyncInterval = 2
+	}
+	if playerSyncInterval > 300 {
+		playerSyncInterval = 300
+	}
+	if pingPollInterval <= 0 {
+		pingPollInterval = 20
+	}
+	if pingPollInterval < 5 {
+		pingPollInterval = 5
+	}
+	if pingPollInterval > 300 {
+		pingPollInterval = 300
 	}
 	loginUser = strings.TrimSpace(loginUser)
 	if loginUser == "" {
@@ -254,6 +325,9 @@ func (m *Manager) UpdateAppSettings(userAgent, defaultMinRAM, defaultMaxRAM, def
 		DefaultMaxRAM:      defaultMaxRAM,
 		DefaultFlags:       defaultFlags,
 		StatusPollInterval: statusPollInterval,
+		TpsPollInterval:    tpsPollInterval,
+		PlayerSyncInterval: playerSyncInterval,
+		PingPollInterval:   pingPollInterval,
 		LoginUser:          loginUser,
 		LoginPasswordHash:  passwordHash,
 	}
@@ -287,4 +361,3 @@ func (m *Manager) IsUsingDefaultLogin() bool {
 
 	return m.settings.LoginUser == defaultLoginUser() && verifyPassword(m.settings.LoginPasswordHash, defaultLoginPassword())
 }
-

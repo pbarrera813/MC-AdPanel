@@ -64,6 +64,12 @@ func (h *PluginHandler) Upload(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		if errors.Is(err, minecraft.ErrExtensionAlreadyInstalled) {
+			respondJSON(w, http.StatusConflict, map[string]string{
+				"error": "already_installed",
+			})
+			return
+		}
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}

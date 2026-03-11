@@ -178,8 +178,8 @@ func (h *ServerHandler) ScheduleRestart(w http.ResponseWriter, r *http.Request) 
 		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
-	if req.DelaySeconds <= 0 {
-		respondError(w, http.StatusBadRequest, "delaySeconds must be positive")
+	if req.DelaySeconds < 0 {
+		respondError(w, http.StatusBadRequest, "delaySeconds must be zero or positive")
 		return
 	}
 
@@ -199,6 +199,29 @@ func (h *ServerHandler) CancelRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
+}
+
+// ScheduleStop handles POST /api/servers/{id}/schedule-stop
+func (h *ServerHandler) ScheduleStop(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		DelaySeconds int `json:"delaySeconds"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if req.DelaySeconds <= 0 {
+		respondError(w, http.StatusBadRequest, "delaySeconds must be positive")
+		return
+	}
+
+	if err := h.mgr.ScheduleStop(id, req.DelaySeconds); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "scheduled"})
 }
 
 // Clone handles POST /api/servers/clone

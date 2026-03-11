@@ -95,6 +95,7 @@ func main() {
 	mux.HandleFunc("GET /api/servers/{id}/status", serverHandler.Status)
 	mux.HandleFunc("POST /api/servers/{id}/schedule-restart", serverHandler.ScheduleRestart)
 	mux.HandleFunc("DELETE /api/servers/{id}/schedule-restart", serverHandler.CancelRestart)
+	mux.HandleFunc("POST /api/servers/{id}/schedule-stop", serverHandler.ScheduleStop)
 	mux.HandleFunc("POST /api/servers/{id}/retry-install", serverHandler.RetryInstall)
 	mux.HandleFunc("PUT /api/servers/{id}/version", serverHandler.UpdateVersion)
 	mux.HandleFunc("PUT /api/servers/{id}/settings", serverHandler.UpdateSettings)

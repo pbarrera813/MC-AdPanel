@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"minecraft-admin/minecraft"
 )
@@ -16,6 +17,8 @@ type PlayersResponse struct {
 	Players       []minecraft.PlayerInfo `json:"players"`
 	PingSupported bool                   `json:"pingSupported"`
 	PingStatus    string                 `json:"pingStatus,omitempty"` // missing_pingplayer | modded
+	DataStale     bool                   `json:"dataStale,omitempty"`
+	LastSyncAt    string                 `json:"lastSyncAt,omitempty"`
 }
 
 // NewPlayerHandler creates a new PlayerHandler
@@ -26,7 +29,7 @@ func NewPlayerHandler(mgr *minecraft.Manager) *PlayerHandler {
 // List handles GET /api/servers/{id}/players
 func (h *PlayerHandler) List(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	players, err := h.mgr.ListPlayers(id)
+	players, isStale, lastSyncAt, err := h.mgr.ListPlayersWithFreshness(id)
 	if err != nil {
 		respondError(w, http.StatusNotFound, err.Error())
 		return
@@ -36,11 +39,16 @@ func (h *PlayerHandler) List(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	respondJSON(w, http.StatusOK, PlayersResponse{
+	resp := PlayersResponse{
 		Players:       players,
 		PingSupported: pingSupported,
 		PingStatus:    pingStatus,
-	})
+		DataStale:     isStale,
+	}
+	if !lastSyncAt.IsZero() {
+		resp.LastSyncAt = lastSyncAt.UTC().Format(time.RFC3339)
+	}
+	respondJSON(w, http.StatusOK, resp)
 }
 
 // Kick handles POST /api/servers/{id}/players/{name}/kick

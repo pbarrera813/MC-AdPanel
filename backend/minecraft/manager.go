@@ -5,10 +5,13 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,6 +66,7 @@ type ServerInfo struct {
 	AlwaysPreTouch     bool    `json:"alwaysPreTouch"`
 	InstallError       string  `json:"installError,omitempty"`
 	FabricTpsAvailable bool    `json:"fabricTpsAvailable,omitempty"`
+	TpsStale           bool    `json:"tpsStale,omitempty"`
 }
 
 // PluginInfo represents a plugin jar file
@@ -104,11 +108,13 @@ type PlayerInfo struct {
 
 // onlinePlayer tracks a connected player's session
 type onlinePlayer struct {
-	Name     string
-	IP       string
-	Ping     int
-	World    string
-	JoinedAt time.Time
+	Name        string
+	IP          string
+	Ping        int
+	World       string
+	JoinedAt    time.Time
+	LastWorldAt time.Time
+	LastPingAt  time.Time
 }
 
 // CrashReport represents a crash report file
@@ -142,9 +148,13 @@ type runningServer struct {
 	lastPingPlayer     string
 	restartTimer       *time.Timer
 	restartAt          time.Time
+	stopTimer          *time.Timer
+	stopAt             time.Time
 	installError       string
 	lastTpsCmd         time.Time
+	lastTpsUpdate      time.Time
 	lastPlayerInfoCmd  time.Time
+	lastPlayersSync    time.Time
 	lastPingCmd        time.Time
 	pendingListRefresh bool
 	nextListRefreshAt  time.Time
@@ -155,14 +165,76 @@ type runningServer struct {
 	stopMetrics        chan struct{}
 }
 
+func clearScheduledActionsLocked(rs *runningServer) {
+	if rs.restartTimer != nil {
+		rs.restartTimer.Stop()
+		rs.restartTimer = nil
+	}
+	rs.restartAt = time.Time{}
+	if rs.stopTimer != nil {
+		rs.stopTimer.Stop()
+		rs.stopTimer = nil
+	}
+	rs.stopAt = time.Time{}
+}
+
+func (m *Manager) executeRestart(id string, cfg *ServerConfig) {
+	log.Printf("[%s] Scheduled restart executing", cfg.Name)
+	m.SendCommand(id, "say Server restarting now!")
+	time.Sleep(1 * time.Second)
+
+	if err := m.StopServer(id); err != nil {
+		log.Printf("[%s] Scheduled restart - stop failed: %v", cfg.Name, err)
+		return
+	}
+
+	time.Sleep(3 * time.Second)
+
+	if err := m.StartServer(id); err != nil {
+		log.Printf("[%s] Scheduled restart - start failed: %v", cfg.Name, err)
+	} else {
+		log.Printf("[%s] Scheduled restart completed", cfg.Name)
+	}
+}
+
 const maxLogBuffer = 2000
 const logTrimSize = 200
+const maxPingChecksPerCycle = 6
+const maxWorldRefreshPerCycle = 6
+const extensionCapabilityCacheTTL = 15 * time.Second
+
+var ErrExtensionAlreadyInstalled = errors.New("extension already installed")
+
+var (
+	pingPlayerPluginMetadataKeys = map[string]struct{}{
+		"plugin:pingplayer": {},
+	}
+	pingPlayerModMetadataKeys = map[string]struct{}{
+		"mod:playerping": {},
+		"mod:pingplayer": {},
+	}
+	fabricTpsMetadataKeys = map[string]struct{}{
+		"mod:fabrictps": {},
+	}
+)
+
+type extensionCapabilityCacheEntry struct {
+	value     bool
+	checkedAt time.Time
+}
+
+var extensionCapabilityCache = struct {
+	mu      sync.RWMutex
+	entries map[string]extensionCapabilityCacheEntry
+}{
+	entries: make(map[string]extensionCapabilityCacheEntry),
+}
 
 // Regex patterns for player tracking and server info
 var (
 	// Support Java names and Floodgate-prefixed Bedrock names (prefix is configurable).
 	playerNamePattern   = `([^\s\[\]:]+)`
-	joinPattern         = regexp.MustCompile(playerNamePattern + `\[/([0-9a-fA-F:.]+):\d+\] logged in`)
+	joinPattern         = regexp.MustCompile(playerNamePattern + `\[/([^\]]+):\d+\] logged in`)
 	leavePattern        = regexp.MustCompile(playerNamePattern + ` left the game`)
 	ansiPattern         = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 	mcColorPattern      = regexp.MustCompile(`§[0-9a-fk-or]`)
@@ -170,7 +242,7 @@ var (
 	tpsPattern          = regexp.MustCompile(`TPS from last 1m, 5m, 15m: \*?([0-9.]+)`)
 	forgeTpsPattern     = regexp.MustCompile(`(?i)overall:\s*(?:tps[:=]\s*)?([0-9.]+)\s*tps\b|overall:.*\btps[:=]\s*([0-9.]+)`)
 	simpleTpsPattern    = regexp.MustCompile(`(?i)\bTPS[:=]\s*([0-9.]+)`)
-	dimensionPattern    = regexp.MustCompile(playerNamePattern + ` has the following entity data: "minecraft:(\w+)"`)
+	dimensionPattern    = regexp.MustCompile(playerNamePattern + ` has the following entity data: "?((?:[a-z0-9_.-]+:)?[a-z0-9_./-]+)"?`)
 	listPattern         = regexp.MustCompile(`There are (\d+) of a max of (\d+) players online:\s*(.*)`)
 	pingPattern1        = regexp.MustCompile(`(?i)ping of ` + playerNamePattern + ` (?:is|was) ([0-9]+)`)
 	pingPattern2        = regexp.MustCompile(`(?i)` + playerNamePattern + `'?s ping(?: is|:)? ([0-9]+)`)
@@ -263,6 +335,193 @@ func tpsCommandForType(serverType string) (string, bool) {
 	}
 }
 
+func writeVarInt(w io.Writer, value int) error {
+	u := uint32(value)
+	for {
+		if (u & ^uint32(0x7F)) == 0 {
+			_, err := w.Write([]byte{byte(u)})
+			return err
+		}
+		if _, err := w.Write([]byte{byte((u & 0x7F) | 0x80)}); err != nil {
+			return err
+		}
+		u >>= 7
+	}
+}
+
+func readVarInt(r io.Reader) (int, error) {
+	var numRead int
+	var result int
+	for {
+		if numRead >= 5 {
+			return 0, fmt.Errorf("varint too long")
+		}
+		var b [1]byte
+		if _, err := io.ReadFull(r, b[:]); err != nil {
+			return 0, err
+		}
+		value := int(b[0] & 0x7F)
+		result |= value << (7 * numRead)
+		numRead++
+		if (b[0] & 0x80) == 0 {
+			break
+		}
+	}
+	return result, nil
+}
+
+func writeMCString(w io.Writer, s string) error {
+	if err := writeVarInt(w, len(s)); err != nil {
+		return err
+	}
+	_, err := io.WriteString(w, s)
+	return err
+}
+
+func readMCString(r io.Reader) (string, error) {
+	strLen, err := readVarInt(r)
+	if err != nil {
+		return "", err
+	}
+	if strLen < 0 || strLen > 1<<20 {
+		return "", fmt.Errorf("invalid string length %d", strLen)
+	}
+	buf := make([]byte, strLen)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return "", err
+	}
+	return string(buf), nil
+}
+
+func writePacket(w io.Writer, payload []byte) error {
+	var packet bytes.Buffer
+	if err := writeVarInt(&packet, len(payload)); err != nil {
+		return err
+	}
+	if _, err := packet.Write(payload); err != nil {
+		return err
+	}
+	_, err := w.Write(packet.Bytes())
+	return err
+}
+
+func readPacket(r io.Reader) ([]byte, error) {
+	length, err := readVarInt(r)
+	if err != nil {
+		return nil, err
+	}
+	if length <= 0 || length > 1<<20 {
+		return nil, fmt.Errorf("invalid packet length %d", length)
+	}
+	payload := make([]byte, length)
+	if _, err := io.ReadFull(r, payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func sampleMinecraftStatus(port int) (int, []string, error) {
+	if port <= 0 || port > 65535 {
+		return 0, nil, fmt.Errorf("invalid port %d", port)
+	}
+
+	dialer := net.Dialer{Timeout: 1500 * time.Millisecond}
+	conn, err := dialer.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return 0, nil, err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+
+	var handshake bytes.Buffer
+	if err := writeVarInt(&handshake, 0x00); err != nil {
+		return 0, nil, err
+	}
+	if err := writeVarInt(&handshake, 767); err != nil {
+		return 0, nil, err
+	}
+	if err := writeMCString(&handshake, "127.0.0.1"); err != nil {
+		return 0, nil, err
+	}
+	var portBytes [2]byte
+	binary.BigEndian.PutUint16(portBytes[:], uint16(port))
+	if _, err := handshake.Write(portBytes[:]); err != nil {
+		return 0, nil, err
+	}
+	if err := writeVarInt(&handshake, 1); err != nil {
+		return 0, nil, err
+	}
+
+	if err := writePacket(conn, handshake.Bytes()); err != nil {
+		return 0, nil, err
+	}
+	if err := writePacket(conn, []byte{0x00}); err != nil {
+		return 0, nil, err
+	}
+
+	payload, err := readPacket(conn)
+	if err != nil {
+		return 0, nil, err
+	}
+	packetReader := bytes.NewReader(payload)
+	packetID, err := readVarInt(packetReader)
+	if err != nil {
+		return 0, nil, err
+	}
+	if packetID != 0x00 {
+		return 0, nil, fmt.Errorf("unexpected status packet id %d", packetID)
+	}
+	statusJSON, err := readMCString(packetReader)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	var status struct {
+		Players struct {
+			Online int `json:"online"`
+			Sample []struct {
+				Name string `json:"name"`
+			} `json:"sample"`
+		} `json:"players"`
+	}
+	if err := json.Unmarshal([]byte(statusJSON), &status); err != nil {
+		return 0, nil, err
+	}
+
+	names := make([]string, 0, len(status.Players.Sample))
+	seen := make(map[string]struct{}, len(status.Players.Sample))
+	for _, entry := range status.Players.Sample {
+		name := strings.TrimSpace(entry.Name)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	return status.Players.Online, names, nil
+}
+
+type pollIntervals struct {
+	tpsSeconds        int
+	playerSyncSeconds int
+	pingSeconds       int
+}
+
+func (m *Manager) currentPollIntervals() pollIntervals {
+	m.settingsMu.RLock()
+	cfg := m.settings
+	m.settingsMu.RUnlock()
+	applySettingsDefaults(&cfg)
+	return pollIntervals{
+		tpsSeconds:        cfg.TpsPollInterval,
+		playerSyncSeconds: cfg.PlayerSyncInterval,
+		pingSeconds:       cfg.PingPollInterval,
+	}
+}
+
 func scheduleListRefreshLocked(rs *runningServer, delay time.Duration) {
 	when := time.Now().Add(delay)
 	if !rs.pendingListRefresh || rs.nextListRefreshAt.IsZero() || when.Before(rs.nextListRefreshAt) {
@@ -271,69 +530,56 @@ func scheduleListRefreshLocked(rs *runningServer, delay time.Duration) {
 	}
 }
 
+func hasMetadataCapabilityInDirCached(cacheKey, dirPath string, expectedKeys map[string]struct{}) bool {
+	now := time.Now()
+	extensionCapabilityCache.mu.RLock()
+	entry, ok := extensionCapabilityCache.entries[cacheKey]
+	extensionCapabilityCache.mu.RUnlock()
+	if ok && now.Sub(entry.checkedAt) < extensionCapabilityCacheTTL {
+		return entry.value
+	}
+
+	found := false
+	entries, err := os.ReadDir(dirPath)
+	if err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			lowerName := strings.ToLower(entry.Name())
+			if !strings.HasSuffix(lowerName, ".jar") {
+				continue
+			}
+			metadataKey := extractExtensionMetadataKeyFromFile(filepath.Join(dirPath, entry.Name()))
+			if metadataKey == "" {
+				continue
+			}
+			if _, ok := expectedKeys[metadataKey]; ok {
+				found = true
+				break
+			}
+		}
+	}
+
+	extensionCapabilityCache.mu.Lock()
+	extensionCapabilityCache.entries[cacheKey] = extensionCapabilityCacheEntry{
+		value:     found,
+		checkedAt: now,
+	}
+	extensionCapabilityCache.mu.Unlock()
+	return found
+}
+
 func hasFabricTps(modsDir string) bool {
-	entries, err := os.ReadDir(modsDir)
-	if err != nil {
-		return false
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := strings.ToLower(entry.Name())
-		if !strings.HasSuffix(name, ".jar") {
-			continue
-		}
-		if strings.Contains(name, "fabric-tps") || strings.Contains(name, "fabric_tps") || strings.Contains(name, "fabrictps") {
-			return true
-		}
-	}
-	return false
+	return hasMetadataCapabilityInDirCached("fabric_tps:"+modsDir, modsDir, fabricTpsMetadataKeys)
 }
 
 func hasPingPlayer(pluginsDir string) bool {
-	entries, err := os.ReadDir(pluginsDir)
-	if err != nil {
-		return false
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := strings.ToLower(entry.Name())
-		if !strings.HasSuffix(name, ".jar") {
-			continue
-		}
-		jarPath := filepath.Join(pluginsDir, entry.Name())
-		pluginName, _ := extractPluginVersion(jarPath)
-		if strings.EqualFold(pluginName, "PingPlayer") || strings.EqualFold(pluginName, "pingplayer") {
-			return true
-		}
-		if strings.Contains(name, "pingplayer") {
-			return true
-		}
-	}
-	return false
+	return hasMetadataCapabilityInDirCached("ping_plugin:"+pluginsDir, pluginsDir, pingPlayerPluginMetadataKeys)
 }
 
 func hasPingPlayerMod(modsDir string) bool {
-	entries, err := os.ReadDir(modsDir)
-	if err != nil {
-		return false
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := strings.ToLower(entry.Name())
-		if !strings.HasSuffix(name, ".jar") {
-			continue
-		}
-		if strings.Contains(name, "player-ping") || strings.Contains(name, "player_ping") || strings.Contains(name, "playerping") || strings.Contains(name, "pingplayer") {
-			return true
-		}
-	}
-	return false
+	return hasMetadataCapabilityInDirCached("ping_mod:"+modsDir, modsDir, pingPlayerModMetadataKeys)
 }
 
 func (m *Manager) refreshPingSupport(id string) {
@@ -457,6 +703,111 @@ func shouldHideServerRootArtifact(subPath, name string) bool {
 	}
 	_, hidden := hiddenServerRootArtifacts[name]
 	return hidden
+}
+
+func normalizePlayerWorld(raw string) string {
+	world := strings.TrimSpace(strings.Trim(raw, `"`))
+	if world == "" {
+		return ""
+	}
+
+	switch strings.ToLower(world) {
+	case "minecraft:overworld", "overworld":
+		return "Overworld"
+	case "minecraft:the_nether", "the_nether":
+		return "Nether"
+	case "minecraft:the_end", "the_end":
+		return "The End"
+	}
+
+	if idx := strings.LastIndex(world, ":"); idx >= 0 && idx < len(world)-1 {
+		return world[idx+1:]
+	}
+
+	return world
+}
+
+func resolveDirEntryInfo(dirPath string, entry os.DirEntry) (os.FileInfo, error) {
+	entryPath := filepath.Join(dirPath, entry.Name())
+	if info, err := os.Stat(entryPath); err == nil {
+		return info, nil
+	}
+	return os.Lstat(entryPath)
+}
+
+func applyPlayerSampleLocked(rs *runningServer, sampleNames []string, onlineCount int, sampledAt time.Time) {
+	if onlineCount == 0 {
+		rs.players = make(map[string]*onlinePlayer)
+		rs.lastPlayersSync = sampledAt
+		return
+	}
+	if len(sampleNames) == 0 {
+		return
+	}
+
+	sampleSet := make(map[string]struct{}, len(sampleNames))
+	for _, name := range sampleNames {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			continue
+		}
+		sampleSet[trimmed] = struct{}{}
+		if _, ok := rs.players[trimmed]; !ok {
+			rs.players[trimmed] = &onlinePlayer{
+				Name:     trimmed,
+				Ping:     -1,
+				JoinedAt: sampledAt,
+			}
+		}
+	}
+
+	// Only prune when sample appears to be complete for current online players.
+	if onlineCount > 0 && len(sampleSet) >= onlineCount {
+		for name := range rs.players {
+			if _, ok := sampleSet[name]; !ok {
+				delete(rs.players, name)
+				delete(rs.pingBlocked, name)
+			}
+		}
+	}
+	rs.lastPlayersSync = sampledAt
+}
+
+func (m *Manager) refreshPlayerWorlds(id string, rs *runningServer, playerNames []string) {
+	if len(playerNames) == 0 {
+		return
+	}
+
+	sort.Strings(playerNames)
+
+	rs.mu.Lock()
+	rs.lastPlayerInfoCmd = time.Now()
+	rs.mu.Unlock()
+
+	for _, name := range playerNames {
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		m.SendCommand(id, fmt.Sprintf("data get entity %s Dimension", name))
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func inferPlayerIPFromLogBuffer(rs *runningServer, playerName string) string {
+	playerName = strings.TrimSpace(playerName)
+	if playerName == "" {
+		return ""
+	}
+	pattern := regexp.MustCompile(regexp.QuoteMeta(playerName) + `\[/([^\]]+):\d+\] logged in`)
+	for i := len(rs.logBuffer) - 1; i >= 0; i-- {
+		clean := ansiPattern.ReplaceAllString(rs.logBuffer[i].Line, "")
+		clean = mcColorPattern.ReplaceAllString(clean, "")
+		clean = strings.TrimRight(clean, " \r")
+		if matches := pattern.FindStringSubmatch(clean); len(matches) >= 2 {
+			return strings.TrimSpace(matches[1])
+		}
+	}
+	return ""
 }
 
 func (m *Manager) migrateLegacyServerArtifacts() {
@@ -767,6 +1118,9 @@ func (m *Manager) StartServer(id string) error {
 	rs.nextLogSeq = 1
 	rs.pendingListRefresh = false
 	rs.nextListRefreshAt = time.Time{}
+	rs.lastPlayersSync = time.Time{}
+	rs.lastTpsUpdate = time.Time{}
+	clearScheduledActionsLocked(rs)
 	rs.players = make(map[string]*onlinePlayer)
 	rs.stopMetrics = make(chan struct{})
 	rs.mu.Unlock()
@@ -792,8 +1146,11 @@ func (m *Manager) StartServer(id string) error {
 		}
 		rs.cpu = 0
 		rs.ram = 0
+		rs.tps = 0
 		rs.pid = 0
 		rs.players = make(map[string]*onlinePlayer)
+		rs.lastPlayersSync = time.Time{}
+		rs.lastTpsUpdate = time.Time{}
 
 		// Restore safe mode disabled directories
 		if len(rs.safeModeDisabled) > 0 {
@@ -880,6 +1237,7 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 		clean := ansiPattern.ReplaceAllString(line, "")
 		clean = mcColorPattern.ReplaceAllString(clean, "")
 		clean = strings.TrimRight(clean, " \r")
+		var worldRefreshNames []string
 
 		rs.mu.Lock()
 		if strings.Contains(clean, "Done (") {
@@ -904,6 +1262,7 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 				Ping:     -1,
 				JoinedAt: time.Now(),
 			}
+			rs.lastPlayersSync = time.Now()
 			delete(rs.pingBlocked, playerName)
 			// Reconcile player list state after join events without periodic list spam.
 			scheduleListRefreshLocked(rs, 200*time.Millisecond)
@@ -913,6 +1272,7 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 			playerName := matches[1]
 			delete(rs.players, playerName)
 			delete(rs.pingBlocked, playerName)
+			rs.lastPlayersSync = time.Now()
 			// Reconcile player list state after leave events without periodic list spam.
 			scheduleListRefreshLocked(rs, 200*time.Millisecond)
 		}
@@ -926,6 +1286,7 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 		if matches := tpsPattern.FindStringSubmatch(clean); len(matches) >= 2 {
 			if tpsVal, err := strconv.ParseFloat(matches[1], 64); err == nil {
 				rs.tps = tpsVal
+				rs.lastTpsUpdate = time.Now()
 			}
 			if internalCmdRecent {
 				suppressLine = true
@@ -938,6 +1299,7 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 			}
 			if tpsVal, err := strconv.ParseFloat(tpsText, 64); err == nil {
 				rs.tps = tpsVal
+				rs.lastTpsUpdate = time.Now()
 			}
 			if internalCmdRecent {
 				suppressLine = true
@@ -946,6 +1308,7 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 		if matches := simpleTpsPattern.FindStringSubmatch(clean); len(matches) >= 2 {
 			if tpsVal, err := strconv.ParseFloat(matches[1], 64); err == nil {
 				rs.tps = tpsVal
+				rs.lastTpsUpdate = time.Now()
 			}
 			if internalCmdRecent {
 				suppressLine = true
@@ -956,17 +1319,8 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 		if matches := dimensionPattern.FindStringSubmatch(clean); len(matches) >= 3 {
 			playerName := matches[1]
 			if p, ok := rs.players[playerName]; ok {
-				world := matches[2]
-				switch world {
-				case "overworld":
-					p.World = "Overworld"
-				case "the_nether":
-					p.World = "Nether"
-				case "the_end":
-					p.World = "The End"
-				default:
-					p.World = world
-				}
+				p.World = normalizePlayerWorld(matches[2])
+				p.LastWorldAt = time.Now()
 			}
 			if playerCmdRecent {
 				suppressLine = true
@@ -976,6 +1330,7 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 		// Parse list response to verify online players
 		if matches := listPattern.FindStringSubmatch(clean); matches != nil {
 			nameStr := strings.TrimSpace(matches[3])
+			rs.lastPlayersSync = time.Now()
 			if nameStr == "" {
 				rs.players = make(map[string]*onlinePlayer)
 			} else {
@@ -987,12 +1342,16 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 						continue
 					}
 					onlineNames[trimmed] = true
-					if _, ok := rs.players[trimmed]; !ok {
+					if existing, ok := rs.players[trimmed]; !ok {
+						inferredIP := inferPlayerIPFromLogBuffer(rs, trimmed)
 						rs.players[trimmed] = &onlinePlayer{
 							Name:     trimmed,
+							IP:       inferredIP,
 							Ping:     -1,
 							JoinedAt: time.Now(),
 						}
+					} else if existing.IP == "" {
+						existing.IP = inferPlayerIPFromLogBuffer(rs, trimmed)
 					}
 				}
 				for name := range rs.players {
@@ -1005,12 +1364,30 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 			if playerCmdRecent {
 				suppressLine = true
 			}
+			if len(rs.players) > 0 {
+				worldRefreshNames = make([]string, 0, len(rs.players))
+				now := time.Now()
+				for name, player := range rs.players {
+					if player == nil {
+						worldRefreshNames = append(worldRefreshNames, name)
+						continue
+					}
+					if player.World == "" || player.LastWorldAt.IsZero() || now.Sub(player.LastWorldAt) >= 2*time.Minute {
+						worldRefreshNames = append(worldRefreshNames, name)
+					}
+				}
+				if len(worldRefreshNames) > maxWorldRefreshPerCycle {
+					sort.Strings(worldRefreshNames)
+					worldRefreshNames = worldRefreshNames[:maxWorldRefreshPerCycle]
+				}
+			}
 		}
 
 		parsePing := func(playerName string, pingStr string) {
 			if pingVal, err := strconv.Atoi(pingStr); err == nil {
 				if p, ok := rs.players[playerName]; ok {
 					p.Ping = pingVal
+					p.LastPingAt = time.Now()
 				}
 			}
 		}
@@ -1070,6 +1447,9 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 		}
 
 		rs.mu.Unlock()
+		if len(worldRefreshNames) > 0 {
+			go m.refreshPlayerWorlds(id, rs, worldRefreshNames)
+		}
 
 		entry := m.appendLog(rs, line)
 		if !suppressLine {
@@ -1083,14 +1463,16 @@ func (m *Manager) collectMetrics(id string, rs *runningServer) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
-	tpsTicks := 0
-	pingTicks := 0
-	listSafetyTicks := 0
 	listCmd := "list"
 	tpsCmd := ""
 	hasTpsCmd := false
 	serverType := ""
 	serverDir := ""
+	serverPort := 0
+	lastTpsPoll := time.Time{}
+	lastPlayerSyncPoll := time.Time{}
+	lastPingPoll := time.Time{}
+	lastStatusSamplePoll := time.Time{}
 
 	m.mu.RLock()
 	if cfg, ok := m.configs[id]; ok && cfg != nil {
@@ -1098,6 +1480,7 @@ func (m *Manager) collectMetrics(id string, rs *runningServer) {
 		tpsCmd, hasTpsCmd = tpsCommandForType(cfg.Type)
 		serverType = cfg.Type
 		serverDir = cfg.Dir
+		serverPort = cfg.Port
 	}
 	m.mu.RUnlock()
 	if isProxyType(serverType) {
@@ -1147,30 +1530,34 @@ func (m *Manager) collectMetrics(id string, rs *runningServer) {
 			}
 			rs.mu.Unlock()
 
-			// Poll TPS every ~30 seconds
-			tpsTicks++
-			if tpsTicks >= 15 && status == "Running" && hasTpsCmd {
-				tpsTicks = 0
-				rs.mu.Lock()
-				rs.lastTpsCmd = time.Now()
-				rs.mu.Unlock()
-				m.SendCommand(id, tpsCmd)
+			polls := m.currentPollIntervals()
+			now := time.Now()
+
+			// Poll TPS on configurable interval
+			if status == "Running" && hasTpsCmd {
+				tpsInterval := time.Duration(polls.tpsSeconds) * time.Second
+				if lastTpsPoll.IsZero() || now.Sub(lastTpsPoll) >= tpsInterval {
+					lastTpsPoll = now
+					rs.mu.Lock()
+					rs.lastTpsCmd = now
+					rs.mu.Unlock()
+					m.SendCommand(id, tpsCmd)
+				}
+			} else {
+				lastTpsPoll = time.Time{}
 			}
 
-			// Player list refresh is event-driven:
-			// one scan after boot and re-scan on join/leave events.
-			// Additionally run a low-frequency safety resync for custom/localized join/leave messages.
+			// Player list hybrid sync: keep event-based refreshes and add periodic resync.
 			if !isProxyType(serverType) && status == "Running" {
-				listSafetyTicks++
-				if listSafetyTicks >= 60 { // ~120 seconds at 2s tick interval
-					listSafetyTicks = 0
+				playerSyncInterval := time.Duration(polls.playerSyncSeconds) * time.Second
+				if lastPlayerSyncPoll.IsZero() || now.Sub(lastPlayerSyncPoll) >= playerSyncInterval {
+					lastPlayerSyncPoll = now
 					rs.mu.Lock()
 					scheduleListRefreshLocked(rs, 0)
 					rs.mu.Unlock()
 				}
 
 				shouldSendList := false
-				now := time.Now()
 				rs.mu.Lock()
 				if rs.pendingListRefresh && (rs.nextListRefreshAt.IsZero() || !now.Before(rs.nextListRefreshAt)) {
 					rs.pendingListRefresh = false
@@ -1182,40 +1569,78 @@ func (m *Manager) collectMetrics(id string, rs *runningServer) {
 				if shouldSendList {
 					m.SendCommand(id, listCmd)
 				}
-			} else if status != "Running" {
-				listSafetyTicks = 0
-			}
 
-			// Poll ping via PingPlayer (if available) every ~20 seconds
-			pingTicks++
-			if pingTicks >= 10 && status == "Running" {
-				pingTicks = 0
-				rs.mu.RLock()
-				pingSupported := rs.pingSupported
-				playerNames := make([]string, 0, len(rs.players))
-				for name := range rs.players {
-					playerNames = append(playerNames, name)
-				}
-				rs.mu.RUnlock()
-
-				if pingSupported && len(playerNames) > 0 {
-					rs.mu.Lock()
-					rs.lastPingCmd = time.Now()
-					rs.mu.Unlock()
-					for _, name := range playerNames {
+				// Lightweight fallback: sample status response for player names when parser data is stale.
+				if serverPort > 0 {
+					statusSampleInterval := time.Duration(polls.playerSyncSeconds*3) * time.Second
+					if statusSampleInterval < 30*time.Second {
+						statusSampleInterval = 30 * time.Second
+					}
+					shouldSampleStatus := lastStatusSamplePoll.IsZero() || now.Sub(lastStatusSamplePoll) >= statusSampleInterval
+					if !shouldSampleStatus {
 						rs.mu.RLock()
-						blocked := rs.pingBlocked[name]
+						lastSync := rs.lastPlayersSync
+						playerCount := len(rs.players)
 						rs.mu.RUnlock()
-						if blocked {
-							continue
+						staleAfter := time.Duration((polls.playerSyncSeconds*2)+5) * time.Second
+						if playerCount > 0 && (lastSync.IsZero() || now.Sub(lastSync) > staleAfter) && now.Sub(lastStatusSamplePoll) >= 10*time.Second {
+							shouldSampleStatus = true
 						}
-						rs.mu.Lock()
-						rs.lastPingPlayer = name
-						rs.mu.Unlock()
-						m.SendCommand(id, "ping "+name)
-						time.Sleep(200 * time.Millisecond)
+					}
+					if shouldSampleStatus {
+						lastStatusSamplePoll = now
+						if sampledOnline, sampledNames, err := sampleMinecraftStatus(serverPort); err == nil {
+							rs.mu.Lock()
+							applyPlayerSampleLocked(rs, sampledNames, sampledOnline, now)
+							rs.mu.Unlock()
+						}
 					}
 				}
+			} else {
+				lastPlayerSyncPoll = time.Time{}
+				lastStatusSamplePoll = time.Time{}
+			}
+
+			// Poll ping on configurable interval
+			if status == "Running" {
+				pingInterval := time.Duration(polls.pingSeconds) * time.Second
+				if lastPingPoll.IsZero() || now.Sub(lastPingPoll) >= pingInterval {
+					lastPingPoll = now
+					rs.mu.RLock()
+					pingSupported := rs.pingSupported
+					playerNames := make([]string, 0, len(rs.players))
+					for name, player := range rs.players {
+						if player == nil || player.LastPingAt.IsZero() || now.Sub(player.LastPingAt) >= pingInterval {
+							playerNames = append(playerNames, name)
+						}
+					}
+					rs.mu.RUnlock()
+					sort.Strings(playerNames)
+					if len(playerNames) > maxPingChecksPerCycle {
+						playerNames = playerNames[:maxPingChecksPerCycle]
+					}
+
+					if pingSupported && len(playerNames) > 0 {
+						rs.mu.Lock()
+						rs.lastPingCmd = now
+						rs.mu.Unlock()
+						for _, name := range playerNames {
+							rs.mu.RLock()
+							blocked := rs.pingBlocked[name]
+							rs.mu.RUnlock()
+							if blocked {
+								continue
+							}
+							rs.mu.Lock()
+							rs.lastPingPlayer = name
+							rs.mu.Unlock()
+							m.SendCommand(id, "ping "+name)
+							time.Sleep(200 * time.Millisecond)
+						}
+					}
+				}
+			} else {
+				lastPingPoll = time.Time{}
 			}
 		}
 	}
@@ -1270,11 +1695,7 @@ func (m *Manager) StopServer(id string) error {
 	rs.ram = 0
 	rs.pid = 0
 	rs.players = make(map[string]*onlinePlayer)
-	if rs.restartTimer != nil {
-		rs.restartTimer.Stop()
-		rs.restartTimer = nil
-		rs.restartAt = time.Time{}
-	}
+	clearScheduledActionsLocked(rs)
 	rs.mu.Unlock()
 
 	return nil
@@ -1484,7 +1905,23 @@ func (m *Manager) serverInfo(id string) *ServerInfo {
 		info.RAM = rs.ram
 		info.TPS = rs.tps
 		info.InstallError = rs.installError
+		lastTpsUpdate := rs.lastTpsUpdate
 		rs.mu.RUnlock()
+
+		_, tpsSupported := tpsCommandForType(cfg.Type)
+		if isProxyType(cfg.Type) {
+			tpsSupported = false
+		}
+		if strings.EqualFold(cfg.Type, "fabric") && !info.FabricTpsAvailable {
+			tpsSupported = false
+		}
+		if tpsSupported && info.Status == "Running" {
+			polls := m.currentPollIntervals()
+			staleThreshold := time.Duration((polls.tpsSeconds*2)+5) * time.Second
+			if lastTpsUpdate.IsZero() || time.Since(lastTpsUpdate) > staleThreshold {
+				info.TpsStale = true
+			}
+		}
 	}
 
 	return info
@@ -2023,6 +2460,33 @@ func (m *Manager) UploadPlugin(id, fileName string, data []byte, conflictAction 
 		return "", "", err
 	}
 
+	uploadedMetadataKey := extractExtensionMetadataKeyFromBytes(data)
+	if uploadedMetadataKey != "" {
+		entries, err := os.ReadDir(pDir)
+		if err != nil && !os.IsNotExist(err) {
+			return "", "", err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			lowerName := strings.ToLower(entry.Name())
+			if !strings.HasSuffix(lowerName, ".jar") && !strings.HasSuffix(lowerName, ".jar.disabled") {
+				continue
+			}
+			if strings.EqualFold(entry.Name(), fileName) {
+				continue
+			}
+			existingPath, err := SafePath(pDir, entry.Name())
+			if err != nil {
+				continue
+			}
+			if existingKey := extractExtensionMetadataKeyFromFile(existingPath); existingKey != "" && existingKey == uploadedMetadataKey {
+				return "", "", ErrExtensionAlreadyInstalled
+			}
+		}
+	}
+
 	conflictAction = strings.ToLower(strings.TrimSpace(conflictAction))
 	existingInfo, statErr := os.Stat(pluginPath)
 	if statErr == nil {
@@ -2314,7 +2778,10 @@ func (m *Manager) RestoreBackup(id, fileName string) error {
 		return fmt.Errorf("failed to read server directory: %w", err)
 	}
 	for _, entry := range entries {
-		os.RemoveAll(filepath.Join(cfg.Dir, entry.Name()))
+		target := filepath.Join(cfg.Dir, entry.Name())
+		if err := os.RemoveAll(target); err != nil {
+			return fmt.Errorf("failed to clear server directory entry %q: %w", entry.Name(), err)
+		}
 	}
 
 	// Extract backup
@@ -2481,12 +2948,22 @@ func (m *Manager) ListFiles(id, subPath string) ([]FileEntry, error) {
 		if shouldHideServerRootArtifact(subPath, entry.Name()) {
 			continue
 		}
-		info, err := entry.Info()
+		info, err := resolveDirEntryInfo(dirPath, entry)
 		if err != nil {
+			entryType := "file"
+			if entry.IsDir() {
+				entryType = "folder"
+			}
+			files = append(files, FileEntry{
+				Name:    entry.Name(),
+				Type:    entryType,
+				Size:    "-",
+				ModTime: time.Time{}.UTC().Format(time.RFC3339),
+			})
 			continue
 		}
 		entryType := "file"
-		if entry.IsDir() {
+		if info.IsDir() || entry.IsDir() {
 			entryType = "folder"
 		}
 		files = append(files, FileEntry{
@@ -2618,21 +3095,21 @@ func (m *Manager) RenamePath(id, oldSubPath, newName string) error {
 // Player Methods
 // ============================================================
 
-// ListPlayers returns currently online players tracked from log parsing
-func (m *Manager) ListPlayers(id string) ([]PlayerInfo, error) {
+func (m *Manager) listPlayersSnapshot(id string) ([]PlayerInfo, bool, time.Time, error) {
 	m.mu.RLock()
 	rs, ok := m.running[id]
 	m.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("server %s not found", id)
+		return nil, false, time.Time{}, fmt.Errorf("server %s not found", id)
 	}
 
 	rs.mu.RLock()
 	defer rs.mu.RUnlock()
 
 	if rs.status != "Running" {
-		return []PlayerInfo{}, nil
+		return []PlayerInfo{}, false, time.Time{}, nil
 	}
+	lastSync := rs.lastPlayersSync
 
 	players := make([]PlayerInfo, 0)
 	for _, p := range rs.players {
@@ -2660,7 +3137,22 @@ func (m *Manager) ListPlayers(id string) ([]PlayerInfo, error) {
 		return players[i].Name < players[j].Name
 	})
 
-	return players, nil
+	pollCfg := m.currentPollIntervals()
+	staleThreshold := time.Duration((pollCfg.playerSyncSeconds*2)+5) * time.Second
+	isStale := len(players) > 0 && (lastSync.IsZero() || time.Since(lastSync) > staleThreshold)
+
+	return players, isStale, lastSync, nil
+}
+
+// ListPlayers returns currently online players tracked from log parsing
+func (m *Manager) ListPlayers(id string) ([]PlayerInfo, error) {
+	players, _, _, err := m.listPlayersSnapshot(id)
+	return players, err
+}
+
+// ListPlayersWithFreshness returns players plus freshness metadata for UI hints.
+func (m *Manager) ListPlayersWithFreshness(id string) ([]PlayerInfo, bool, time.Time, error) {
+	return m.listPlayersSnapshot(id)
 }
 
 func (m *Manager) GetPingSupport(id string) (bool, string, error) {
@@ -2742,36 +3234,20 @@ func (m *Manager) ScheduleRestart(id string, delaySeconds int) error {
 		rs.mu.Unlock()
 		return fmt.Errorf("server must be running to schedule a restart")
 	}
+	clearScheduledActionsLocked(rs)
 
-	// Cancel any existing scheduled restart
-	if rs.restartTimer != nil {
-		rs.restartTimer.Stop()
+	if delaySeconds == 0 {
+		rs.mu.Unlock()
+		go m.executeRestart(id, cfg)
+		log.Printf("[%s] Immediate restart requested", cfg.Name)
+		return nil
 	}
 
 	rs.restartAt = time.Now().Add(time.Duration(delaySeconds) * time.Second)
-
 	rs.restartTimer = time.AfterFunc(time.Duration(delaySeconds)*time.Second, func() {
-		log.Printf("[%s] Scheduled restart executing", cfg.Name)
-
-		// Warn players
 		m.SendCommand(id, "say Server restarting in 10 seconds...")
 		time.Sleep(10 * time.Second)
-		m.SendCommand(id, "say Server restarting now!")
-		time.Sleep(1 * time.Second)
-
-		if err := m.StopServer(id); err != nil {
-			log.Printf("[%s] Scheduled restart - stop failed: %v", cfg.Name, err)
-			return
-		}
-
-		// Wait for the server to fully stop
-		time.Sleep(3 * time.Second)
-
-		if err := m.StartServer(id); err != nil {
-			log.Printf("[%s] Scheduled restart - start failed: %v", cfg.Name, err)
-		} else {
-			log.Printf("[%s] Scheduled restart completed", cfg.Name)
-		}
+		m.executeRestart(id, cfg)
 	})
 	rs.mu.Unlock()
 
@@ -2800,6 +3276,43 @@ func (m *Manager) CancelRestart(id string) error {
 	rs.restartTimer = nil
 	rs.restartAt = time.Time{}
 
+	return nil
+}
+
+// ScheduleStop schedules a graceful server stop after delaySeconds.
+func (m *Manager) ScheduleStop(id string, delaySeconds int) error {
+	m.mu.RLock()
+	cfg, ok := m.configs[id]
+	rs, rsOk := m.running[id]
+	m.mu.RUnlock()
+
+	if !ok || !rsOk {
+		return fmt.Errorf("server %s not found", id)
+	}
+
+	rs.mu.Lock()
+	if rs.status != "Running" {
+		rs.mu.Unlock()
+		return fmt.Errorf("server must be running to schedule a stop")
+	}
+
+	clearScheduledActionsLocked(rs)
+	rs.stopAt = time.Now().Add(time.Duration(delaySeconds) * time.Second)
+	rs.stopTimer = time.AfterFunc(time.Duration(delaySeconds)*time.Second, func() {
+		log.Printf("[%s] Scheduled stop executing", cfg.Name)
+		m.SendCommand(id, "say Server stopping in 10 seconds...")
+		time.Sleep(10 * time.Second)
+		m.SendCommand(id, "say Server stopping now!")
+		time.Sleep(1 * time.Second)
+		if err := m.StopServer(id); err != nil {
+			log.Printf("[%s] Scheduled stop failed: %v", cfg.Name, err)
+			return
+		}
+		log.Printf("[%s] Scheduled stop completed", cfg.Name)
+	})
+	rs.mu.Unlock()
+
+	log.Printf("[%s] Stop scheduled in %d seconds", cfg.Name, delaySeconds)
 	return nil
 }
 

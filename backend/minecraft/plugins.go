@@ -2,6 +2,7 @@ package minecraft
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -132,6 +133,122 @@ func extractTomlValue(line string) string {
 	val := strings.TrimSpace(parts[1])
 	val = strings.Trim(val, "\"'")
 	return val
+}
+
+func normalizeExtensionMetadataToken(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(value))
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func extractExtensionMetadataKeyFromBytes(data []byte) string {
+	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return ""
+	}
+	return extractExtensionMetadataKeyFromZip(reader.File)
+}
+
+func extractExtensionMetadataKeyFromFile(filePath string) string {
+	r, err := zip.OpenReader(filePath)
+	if err != nil {
+		return ""
+	}
+	defer r.Close()
+	return extractExtensionMetadataKeyFromZip(r.File)
+}
+
+func extractExtensionMetadataKeyFromZip(files []*zip.File) string {
+	for _, f := range files {
+		switch f.Name {
+		case "plugin.yml", "bungee.yml":
+			rc, err := f.Open()
+			if err != nil {
+				continue
+			}
+			var data struct {
+				Name string `yaml:"name"`
+			}
+			decodeErr := yaml.NewDecoder(rc).Decode(&data)
+			rc.Close()
+			if decodeErr != nil {
+				continue
+			}
+			if token := normalizeExtensionMetadataToken(data.Name); token != "" {
+				return "plugin:" + token
+			}
+		case "fabric.mod.json":
+			rc, err := f.Open()
+			if err != nil {
+				continue
+			}
+			var data struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			}
+			decodeErr := json.NewDecoder(rc).Decode(&data)
+			rc.Close()
+			if decodeErr != nil {
+				continue
+			}
+			metaID := data.ID
+			if strings.TrimSpace(metaID) == "" {
+				metaID = data.Name
+			}
+			if token := normalizeExtensionMetadataToken(metaID); token != "" {
+				return "mod:" + token
+			}
+		}
+	}
+
+	for _, f := range files {
+		if f.Name != "META-INF/mods.toml" {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			continue
+		}
+		raw, readErr := io.ReadAll(rc)
+		rc.Close()
+		if readErr != nil {
+			continue
+		}
+		content := string(raw)
+
+		modID := ""
+		displayName := ""
+		for _, line := range strings.Split(content, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "modId") {
+				if v := extractTomlValue(line); v != "" {
+					modID = v
+					break
+				}
+			}
+			if strings.HasPrefix(line, "displayName") && displayName == "" {
+				displayName = extractTomlValue(line)
+			}
+		}
+		metaID := modID
+		if metaID == "" {
+			metaID = displayName
+		}
+		if token := normalizeExtensionMetadataToken(metaID); token != "" {
+			return "mod:" + token
+		}
+	}
+
+	return ""
 }
 
 // normalizeVersion strips common prefixes/suffixes and lowercases for comparison
@@ -585,7 +702,8 @@ func chooseComparisonVersion(raw, current string) (parsedVersion, bool) {
 }
 
 // compareParsedVersions returns:
-//  1 if a > b, -1 if a < b, 0 if equal
+//
+//	1 if a > b, -1 if a < b, 0 if equal
 func compareParsedVersions(a, b parsedVersion) int {
 	maxLen := len(a.numbers)
 	if len(b.numbers) > maxLen {
