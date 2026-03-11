@@ -24,7 +24,7 @@ export const Sidebar = ({ currentView, setCurrentView, className }: SidebarProps
     { id: 'plugins', label: 'Plugins / Mods', icon: Box, disabled: !activeServer || pluginsUnsupportedForType, disabledReason: pluginsUnsupportedForType ? 'Not supported on this server type' : '' },
     { id: 'backups', label: 'Backups', icon: Database, disabled: !activeServer },
     { id: 'logs', label: 'Logs', icon: FileText, disabled: !activeServer },
-    { id: 'cloning', label: 'Cloning', icon: Copy, disabled: !activeServer },
+    { id: 'cloning', label: 'Cloning', icon: Copy },
     { id: 'settings', label: 'System Settings', icon: Sliders },
   ] as const;
 
@@ -81,7 +81,7 @@ export const Sidebar = ({ currentView, setCurrentView, className }: SidebarProps
       </div>
 
       <div className="p-4 border-t border-[#3a3a3a] text-xs text-center text-gray-600">
-        v1.0.1 &copy; Pablo Barrera 2026
+        v1.0.1 &copy; Pbarrera813 2026
       </div>
     </div>
   );
