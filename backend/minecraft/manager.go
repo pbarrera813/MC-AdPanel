@@ -1927,7 +1927,107 @@ func (m *Manager) serverInfo(id string) *ServerInfo {
 	return info
 }
 
-// UpdateSettings updates RAM, MaxPlayers, and Port for a server (only when stopped)
+func updateJavaServerProperties(path string, maxPlayers int, port int) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	content := strings.ReplaceAll(string(data), "\r\n", "\n")
+	lines := strings.Split(content, "\n")
+	foundPlayers := false
+	foundPort := false
+	for i, line := range lines {
+		trimmed := strings.TrimRight(line, "\r ")
+		if strings.HasPrefix(trimmed, "max-players=") {
+			lines[i] = fmt.Sprintf("max-players=%d", maxPlayers)
+			foundPlayers = true
+			continue
+		}
+		if strings.HasPrefix(trimmed, "server-port=") {
+			lines[i] = fmt.Sprintf("server-port=%d", port)
+			foundPort = true
+		}
+	}
+	if !foundPlayers {
+		lines = append(lines, fmt.Sprintf("max-players=%d", maxPlayers))
+	}
+	if !foundPort {
+		lines = append(lines, fmt.Sprintf("server-port=%d", port))
+	}
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0644)
+}
+
+func updateVelocityToml(path string, maxPlayers int, port int) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("velocity.toml not found (start the proxy once so it can be generated)")
+		}
+		return err
+	}
+
+	content := strings.ReplaceAll(string(data), "\r\n", "\n")
+	lines := strings.Split(content, "\n")
+	foundShowMaxPlayers := false
+	foundBind := false
+	bindHost := "0.0.0.0"
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "show-max-players") {
+			lines[i] = fmt.Sprintf("show-max-players = %d", maxPlayers)
+			foundShowMaxPlayers = true
+			continue
+		}
+		if strings.HasPrefix(trimmed, "bind") {
+			if start := strings.Index(trimmed, "\""); start >= 0 {
+				rest := trimmed[start+1:]
+				if end := strings.Index(rest, "\""); end >= 0 {
+					rawBind := strings.TrimSpace(rest[:end])
+					if host, _, splitErr := net.SplitHostPort(rawBind); splitErr == nil {
+						if host != "" {
+							bindHost = host
+						}
+					} else if idx := strings.LastIndex(rawBind, ":"); idx > 0 {
+						candidateHost := rawBind[:idx]
+						if candidateHost != "" {
+							bindHost = candidateHost
+						}
+					}
+				}
+			}
+			foundBind = true
+		}
+	}
+
+	bindHost = strings.Trim(bindHost, "[] ")
+	bindValue := bindHost
+	if strings.Contains(bindHost, ":") {
+		bindValue = "[" + bindHost + "]"
+	}
+	bindLine := fmt.Sprintf("bind = \"%s:%d\"", bindValue, port)
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "bind") {
+			lines[i] = bindLine
+		}
+	}
+
+	if !foundShowMaxPlayers {
+		lines = append(lines, fmt.Sprintf("show-max-players = %d", maxPlayers))
+	}
+	if !foundBind {
+		lines = append(lines, bindLine)
+	}
+
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0644)
+}
+
+// UpdateSettings updates RAM, MaxPlayers, and Port for a server (only when stopped).
+// For Velocity proxies, port/max players are persisted in velocity.toml.
 func (m *Manager) UpdateSettings(id, minRAM, maxRAM string, maxPlayers int, port int) (*ServerInfo, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1958,38 +2058,24 @@ func (m *Manager) UpdateSettings(id, minRAM, maxRAM string, maxPlayers int, port
 		}
 	}
 
+	if strings.EqualFold(cfg.Type, "velocity") {
+		velocityPath := filepath.Join(cfg.Dir, "velocity.toml")
+		if err := updateVelocityToml(velocityPath, maxPlayers, port); err != nil {
+			return nil, fmt.Errorf("failed to update velocity.toml: %w", err)
+		}
+	} else {
+		propsPath := filepath.Join(cfg.Dir, "server.properties")
+		if err := updateJavaServerProperties(propsPath, maxPlayers, port); err != nil {
+			return nil, fmt.Errorf("failed to update server.properties: %w", err)
+		}
+	}
+
 	cfg.MinRAM = minRAM
 	cfg.MaxRAM = maxRAM
 	cfg.MaxPlayers = maxPlayers
 	cfg.Port = port
-	m.persist()
-
-	// Update max-players and server-port in server.properties
-	propsPath := filepath.Join(cfg.Dir, "server.properties")
-	data, err := os.ReadFile(propsPath)
-	if err == nil {
-		// Normalize line endings to \n for consistent processing
-		content := strings.ReplaceAll(string(data), "\r\n", "\n")
-		lines := strings.Split(content, "\n")
-		foundPlayers := false
-		foundPort := false
-		for i, line := range lines {
-			trimmed := strings.TrimRight(line, "\r ")
-			if strings.HasPrefix(trimmed, "max-players=") {
-				lines[i] = fmt.Sprintf("max-players=%d", maxPlayers)
-				foundPlayers = true
-			} else if strings.HasPrefix(trimmed, "server-port=") {
-				lines[i] = fmt.Sprintf("server-port=%d", port)
-				foundPort = true
-			}
-		}
-		if !foundPlayers {
-			lines = append(lines, fmt.Sprintf("max-players=%d", maxPlayers))
-		}
-		if !foundPort {
-			lines = append(lines, fmt.Sprintf("server-port=%d", port))
-		}
-		os.WriteFile(propsPath, []byte(strings.Join(lines, "\n")), 0644)
+	if err := m.persist(); err != nil {
+		return nil, err
 	}
 
 	return m.serverInfo(id), nil

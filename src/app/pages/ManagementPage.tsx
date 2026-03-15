@@ -372,6 +372,7 @@ export const ManagementPage = () => {
   };
 
   const isServerRunning = activeServer?.status === 'Running' || activeServer?.status === 'Booting';
+  const isVelocityProxy = activeServer?.type === 'Velocity';
 
   const handleSettingsFieldFocus = () => {
     if (isServerRunning) {
@@ -659,7 +660,9 @@ export const ManagementPage = () => {
                </div>
 
                <div>
-                 <label className="block text-xs text-gray-500 mb-1">Max Players</label>
+                 <label className="block text-xs text-gray-500 mb-1">
+                   {isVelocityProxy ? 'Shown Max Players' : 'Max Players'}
+                 </label>
                  <div className="relative group/input">
                    <input
                      type="number"
@@ -684,7 +687,7 @@ export const ManagementPage = () => {
                </div>
 
                <div>
-                 <label className="block text-xs text-gray-500 mb-1">Port</label>
+                 <label className="block text-xs text-gray-500 mb-1">{isVelocityProxy ? 'Bind Port' : 'Port'}</label>
                  <div className="relative group/input">
                    <input
                      type="number"
