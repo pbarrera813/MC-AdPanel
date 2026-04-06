@@ -17,7 +17,19 @@ func NewSettingsHandler(mgr *minecraft.Manager) *SettingsHandler {
 
 func (h *SettingsHandler) Get(w http.ResponseWriter, _ *http.Request) {
 	settings := h.mgr.GetSettings()
-	respondJSON(w, http.StatusOK, settings)
+	respondJSON(w, http.StatusOK, map[string]any{
+		"userAgent":          settings.UserAgent,
+		"defaultMinRam":      settings.DefaultMinRAM,
+		"defaultMaxRam":      settings.DefaultMaxRAM,
+		"defaultFlags":       settings.DefaultFlags,
+		"statusPollInterval": settings.StatusPollInterval,
+		"tpsPollInterval":    settings.TpsPollInterval,
+		"playerSyncInterval": settings.PlayerSyncInterval,
+		"pingPollInterval":   settings.PingPollInterval,
+		"loginUser":          settings.LoginUser,
+		"passwordMinLength":  minecraft.LoginPasswordMinLength,
+		"maxUploadBytes":     uploadMaxBytesFromEnv(),
+	})
 }
 
 func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -53,5 +65,17 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	respondJSON(w, http.StatusOK, settings)
+	respondJSON(w, http.StatusOK, map[string]any{
+		"userAgent":          settings.UserAgent,
+		"defaultMinRam":      settings.DefaultMinRAM,
+		"defaultMaxRam":      settings.DefaultMaxRAM,
+		"defaultFlags":       settings.DefaultFlags,
+		"statusPollInterval": settings.StatusPollInterval,
+		"tpsPollInterval":    settings.TpsPollInterval,
+		"playerSyncInterval": settings.PlayerSyncInterval,
+		"pingPollInterval":   settings.PingPollInterval,
+		"loginUser":          settings.LoginUser,
+		"passwordMinLength":  minecraft.LoginPasswordMinLength,
+		"maxUploadBytes":     uploadMaxBytesFromEnv(),
+	})
 }
