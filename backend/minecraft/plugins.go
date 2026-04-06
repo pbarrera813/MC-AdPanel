@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"mime"
-	"net/http"
 	"net/url"
 	"os"
 	"path"
@@ -324,10 +323,10 @@ const pluginCacheTTL = 15 * time.Minute
 // CheckPluginUpdates checks all plugins for a server against Modrinth/Spiget APIs
 func (m *Manager) CheckPluginUpdates(id string) ([]PluginUpdateInfo, error) {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return nil, err
 	}
 
 	plugins, err := m.ListPlugins(id)
@@ -1386,10 +1385,10 @@ func validateSourceURLForServerType(serverType, raw string) error {
 // SetPluginSource stores or updates a source URL for a plugin/mod file.
 func (m *Manager) SetPluginSource(id, fileName, sourceURL string) error {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return err
 	}
 
 	if err := validateSourceURLForServerType(cfg.Type, sourceURL); err != nil {
@@ -1397,10 +1396,11 @@ func (m *Manager) SetPluginSource(id, fileName, sourceURL string) error {
 	}
 
 	pDir := extensionsDir(cfg)
-	if _, err := SafePath(pDir, filepath.Base(fileName)); err != nil {
+	pluginPath, err := SafePath(pDir, filepath.Base(fileName))
+	if err != nil {
 		return fmt.Errorf("invalid plugin path: %w", err)
 	}
-	if _, err := os.Stat(filepath.Join(pDir, filepath.Base(fileName))); err != nil {
+	if _, err := os.Stat(pluginPath); err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("plugin file not found: %s", fileName)
 		}
@@ -1607,10 +1607,10 @@ func materializeDownloadJar(tmpPath string) (string, error) {
 func (m *Manager) UpdatePlugin(id, fileName, downloadURL string) (*PluginInfo, error) {
 	// Validate server exists and that plugin path is safe
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return nil, err
 	}
 
 	// Disallow updating while server is running to avoid file-locks / corruption
@@ -1636,40 +1636,12 @@ func (m *Manager) UpdatePlugin(id, fileName, downloadURL string) (*PluginInfo, e
 	tmpPath := jarPath + ".update"
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-
-	client := &http.Client{Timeout: 5 * time.Minute}
-	req, err := http.NewRequestWithContext(ctx, "GET", downloadURL, nil)
+	maxBytes := maxPluginUpdateBytesFromEnv()
+	downloadResult, err := secureDownloadPluginUpdate(ctx, downloadURL, tmpPath, maxBytes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create download request: %w", err)
+		return nil, err
 	}
-	req.Header.Set("User-Agent", userAgent())
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to download update: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("download failed with status %d", resp.StatusCode)
-	}
-
-	resolvedURL := downloadURL
-	if resp.Request != nil && resp.Request.URL != nil {
-		resolvedURL = resp.Request.URL.String()
-	}
-	targetFileName := resolveUpdateJarFileName(resolvedURL, fileName, resp.Header.Get("Content-Disposition"))
-
-	tmpFile, err := os.Create(tmpPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create temp file: %w", err)
-	}
-
-	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
-		return nil, fmt.Errorf("failed to save update: %w", err)
-	}
-	tmpFile.Close()
+	targetFileName := resolveUpdateJarFileName(downloadResult.ResolvedURL, fileName, downloadResult.ContentDisposition)
 
 	downloadedJarPath, err := materializeDownloadJar(tmpPath)
 	if err != nil {
