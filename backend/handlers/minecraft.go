@@ -13,17 +13,28 @@ import (
 
 // MinecraftHandler handles WebSocket connections for console streaming
 type MinecraftHandler struct {
-	mgr      *minecraft.Manager
-	upgrader websocket.Upgrader
+	mgr            *minecraft.Manager
+	upgrader       websocket.Upgrader
+	allowedOrigins map[string]struct{}
+	trustedProxies *trustedProxySet
 }
 
 // NewMinecraftHandler creates a new MinecraftHandler
 func NewMinecraftHandler(mgr *minecraft.Manager) *MinecraftHandler {
+	allowedOrigins := parseAllowedOriginsEnv()
+	trustedProxies := newTrustedProxySetFromEnv()
 	return &MinecraftHandler{
-		mgr: mgr,
+		mgr:            mgr,
+		allowedOrigins: allowedOrigins,
+		trustedProxies: trustedProxies,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
-				return true // Allow all origins (CORS handled at middleware level)
+				origin := strings.TrimSpace(r.Header.Get("Origin"))
+				allowed := isAllowedWebSocketOriginForRequest(r, origin, allowedOrigins, trustedProxies)
+				if !allowed {
+					log.Printf("WebSocket origin rejected for %s from %q", r.URL.Path, origin)
+				}
+				return allowed
 			},
 		},
 	}
