@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"minecraft-admin/minecraft"
@@ -13,12 +14,16 @@ import (
 
 // PluginHandler handles plugin-related REST endpoints
 type PluginHandler struct {
-	mgr *minecraft.Manager
+	mgr            *minecraft.Manager
+	uploadMaxBytes int64
 }
 
 // NewPluginHandler creates a new PluginHandler
 func NewPluginHandler(mgr *minecraft.Manager) *PluginHandler {
-	return &PluginHandler{mgr: mgr}
+	return &PluginHandler{
+		mgr:            mgr,
+		uploadMaxBytes: uploadMaxBytesFromEnv(),
+	}
 }
 
 // List handles GET /api/servers/{id}/plugins
@@ -36,9 +41,17 @@ func (h *PluginHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *PluginHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	if err := r.ParseMultipartForm(64 << 20); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, h.uploadMaxBytes)
+	if err := r.ParseMultipartForm(8 << 20); err != nil {
+		if isRequestBodyTooLarge(err) {
+			respondError(w, http.StatusRequestEntityTooLarge, "uploaded file exceeds maximum allowed size")
+			return
+		}
 		respondError(w, http.StatusBadRequest, "Failed to parse form data")
 		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
 	}
 
 	file, header, err := r.FormFile("file")
@@ -48,14 +61,27 @@ func (h *PluginHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	data, err := io.ReadAll(file)
+	tmpFile, err := os.CreateTemp("", "orexa-plugin-upload-*"+filepath.Ext(header.Filename))
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to read uploaded file")
+		respondError(w, http.StatusInternalServerError, "Failed to create temporary upload file")
+		return
+	}
+	tmpPath := tmpFile.Name()
+	defer func() {
+		_ = os.Remove(tmpPath)
+	}()
+	if _, err := io.Copy(tmpFile, file); err != nil {
+		_ = tmpFile.Close()
+		respondError(w, http.StatusInternalServerError, "Failed to store uploaded file")
+		return
+	}
+	if err := tmpFile.Close(); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to finalize uploaded file")
 		return
 	}
 
 	conflictAction := strings.ToLower(strings.TrimSpace(r.FormValue("conflictAction")))
-	savedName, status, err := h.mgr.UploadPlugin(id, header.Filename, data, conflictAction)
+	savedName, status, err := h.mgr.UploadPluginFromFile(id, header.Filename, tmpPath, conflictAction)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			respondJSON(w, http.StatusConflict, map[string]string{
