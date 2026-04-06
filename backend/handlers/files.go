@@ -16,7 +16,8 @@ import (
 
 // FileHandler handles file browser REST endpoints
 type FileHandler struct {
-	mgr *minecraft.Manager
+	mgr            *minecraft.Manager
+	uploadMaxBytes int64
 }
 
 // Exists handles GET /api/servers/{id}/files/exists?path=file.txt
@@ -55,7 +56,10 @@ func (h *FileHandler) Exists(w http.ResponseWriter, r *http.Request) {
 
 // NewFileHandler creates a new FileHandler
 func NewFileHandler(mgr *minecraft.Manager) *FileHandler {
-	return &FileHandler{mgr: mgr}
+	return &FileHandler{
+		mgr:            mgr,
+		uploadMaxBytes: uploadMaxBytesFromEnv(),
+	}
 }
 
 // List handles GET /api/servers/{id}/files?path=subdir
@@ -128,9 +132,17 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		subPath = "."
 	}
 
-	if err := r.ParseMultipartForm(64 << 20); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, h.uploadMaxBytes)
+	if err := r.ParseMultipartForm(8 << 20); err != nil {
+		if isRequestBodyTooLarge(err) {
+			respondError(w, http.StatusRequestEntityTooLarge, "uploaded file exceeds maximum allowed size")
+			return
+		}
 		respondError(w, http.StatusBadRequest, "Failed to parse form data")
 		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
 	}
 
 	file, header, err := r.FormFile("file")
@@ -139,12 +151,6 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-
-	data, err := io.ReadAll(file)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to read uploaded file")
-		return
-	}
 
 	relativePath := filepath.ToSlash(filepath.Clean(r.FormValue("relativePath")))
 	if relativePath == "." || relativePath == "/" {
@@ -197,7 +203,7 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := os.WriteFile(absPath, data, 0644); err != nil {
+	if err := writeUploadedStream(filepath.Dir(absPath), absPath, file, conflictAction == "replace"); err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -207,6 +213,39 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		status = "replaced"
 	}
 	respondJSON(w, http.StatusOK, map[string]string{"status": status, "name": filepath.Base(targetPath)})
+}
+
+func writeUploadedStream(destDir, destPath string, src io.Reader, replace bool) error {
+	tmpFile, err := os.CreateTemp(destDir, ".upload-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	defer func() {
+		_ = os.Remove(tmpPath)
+	}()
+
+	if _, err := io.Copy(tmpFile, src); err != nil {
+		_ = tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, 0644); err != nil {
+		return err
+	}
+
+	if replace {
+		if err := os.Remove(destPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Delete handles DELETE /api/servers/{id}/files?path=file.txt
