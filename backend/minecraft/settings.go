@@ -7,10 +7,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"golang.org/x/crypto/argon2"
 )
 
 type AppSettings struct {
@@ -31,6 +34,17 @@ var (
 	userAgentOverride string
 )
 
+const (
+	passwordHashSchemeArgon2id  = "argon2id"
+	passwordHashSchemeLegacySHA = "sha256"
+	LoginPasswordMinLength      = 10
+	argon2MemoryKiB             = 64 * 1024
+	argon2Iterations            = 3
+	argon2Parallelism           = 2
+	argon2SaltLength            = 16
+	argon2KeyLength             = 32
+)
+
 func defaultUserAgent() string {
 	return "Orexa-Panel/1.0 (+https://github.com/pbarrera813/Orexa-Panel)"
 }
@@ -44,6 +58,25 @@ func defaultLoginPassword() string {
 }
 
 func hashPassword(password string) (string, error) {
+	salt := make([]byte, argon2SaltLength)
+	if _, err := rand.Read(salt); err != nil {
+		return "", fmt.Errorf("failed to generate salt: %w", err)
+	}
+	key := argon2.IDKey([]byte(password), salt, argon2Iterations, argon2MemoryKiB, argon2Parallelism, argon2KeyLength)
+	saltB64 := base64.RawStdEncoding.EncodeToString(salt)
+	hashB64 := base64.RawStdEncoding.EncodeToString(key)
+	return fmt.Sprintf(
+		"%s$v=19$m=%d,t=%d,p=%d$%s$%s",
+		passwordHashSchemeArgon2id,
+		argon2MemoryKiB,
+		argon2Iterations,
+		argon2Parallelism,
+		saltB64,
+		hashB64,
+	), nil
+}
+
+func hashPasswordLegacySHA256(password string) (string, error) {
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("failed to generate salt: %w", err)
@@ -51,12 +84,12 @@ func hashPassword(password string) (string, error) {
 	sum := sha256.Sum256(append(salt, []byte(password)...))
 	saltB64 := base64.RawStdEncoding.EncodeToString(salt)
 	hashB64 := base64.RawStdEncoding.EncodeToString(sum[:])
-	return "sha256$" + saltB64 + "$" + hashB64, nil
+	return passwordHashSchemeLegacySHA + "$" + saltB64 + "$" + hashB64, nil
 }
 
-func verifyPassword(storedHash, password string) bool {
+func verifyPasswordLegacySHA256(storedHash, password string) bool {
 	parts := strings.Split(storedHash, "$")
-	if len(parts) != 3 || parts[0] != "sha256" {
+	if len(parts) != 3 || parts[0] != passwordHashSchemeLegacySHA {
 		return false
 	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[1])
@@ -69,6 +102,68 @@ func verifyPassword(storedHash, password string) bool {
 	}
 	sum := sha256.Sum256(append(salt, []byte(password)...))
 	return subtle.ConstantTimeCompare(sum[:], want) == 1
+}
+
+func verifyPasswordArgon2id(storedHash, password string) bool {
+	parts := strings.Split(storedHash, "$")
+	if len(parts) != 5 || parts[0] != passwordHashSchemeArgon2id {
+		return false
+	}
+	if parts[1] != "v=19" {
+		return false
+	}
+
+	var memory uint64
+	var iterations uint64
+	var parallelism uint64
+	if _, err := fmt.Sscanf(parts[2], "m=%d,t=%d,p=%d", &memory, &iterations, &parallelism); err != nil {
+		return false
+	}
+	if memory == 0 || iterations == 0 || parallelism == 0 {
+		return false
+	}
+	if memory > uint64(^uint32(0)) || iterations > uint64(^uint32(0)) || parallelism > uint64(^uint8(0)) {
+		return false
+	}
+
+	salt, err := base64.RawStdEncoding.DecodeString(parts[3])
+	if err != nil {
+		return false
+	}
+	want, err := base64.RawStdEncoding.DecodeString(parts[4])
+	if err != nil {
+		return false
+	}
+	if len(want) == 0 || len(want) > 1024 {
+		return false
+	}
+
+	got := argon2.IDKey(
+		[]byte(password),
+		salt,
+		uint32(iterations),
+		uint32(memory),
+		uint8(parallelism),
+		uint32(len(want)),
+	)
+	return subtle.ConstantTimeCompare(got, want) == 1
+}
+
+func verifyPasswordWithUpgrade(storedHash, password string) (valid bool, needsUpgrade bool) {
+	storedHash = strings.TrimSpace(storedHash)
+	switch {
+	case strings.HasPrefix(storedHash, passwordHashSchemeArgon2id+"$"):
+		return verifyPasswordArgon2id(storedHash, password), false
+	case strings.HasPrefix(storedHash, passwordHashSchemeLegacySHA+"$"):
+		return verifyPasswordLegacySHA256(storedHash, password), true
+	default:
+		return false, false
+	}
+}
+
+func verifyPassword(storedHash, password string) bool {
+	valid, _ := verifyPasswordWithUpgrade(storedHash, password)
+	return valid
 }
 
 func setUserAgentOverride(ua string) {
@@ -215,11 +310,14 @@ func (m *Manager) persistSettings() error {
 		return fmt.Errorf("failed to marshal settings: %w", err)
 	}
 	tmpFile := m.settingsFile + ".tmp"
-	if err := os.WriteFile(tmpFile, data, 0644); err != nil {
+	if err := os.WriteFile(tmpFile, data, 0600); err != nil {
 		return fmt.Errorf("failed to write temp settings: %w", err)
 	}
 	if err := os.Rename(tmpFile, m.settingsFile); err != nil {
 		return fmt.Errorf("failed to rename settings file: %w", err)
+	}
+	if err := os.Chmod(m.settingsFile, 0600); err != nil {
+		return fmt.Errorf("failed to secure settings file permissions: %w", err)
 	}
 	return nil
 }
@@ -302,8 +400,8 @@ func (m *Manager) UpdateAppSettings(
 
 	passwordHash := m.settings.LoginPasswordHash
 	if strings.TrimSpace(loginPassword) != "" {
-		if len(loginPassword) < 4 {
-			return AppSettings{}, fmt.Errorf("password must be at least 4 characters")
+		if len(loginPassword) < LoginPasswordMinLength {
+			return AppSettings{}, fmt.Errorf("password must be at least %d characters", LoginPasswordMinLength)
 		}
 		hashed, err := hashPassword(loginPassword)
 		if err != nil {
@@ -346,13 +444,30 @@ func (m *Manager) UpdateAppSettings(
 }
 
 func (m *Manager) ValidateLogin(username, password string) bool {
-	m.settingsMu.RLock()
-	defer m.settingsMu.RUnlock()
+	trimmedUsername := strings.TrimSpace(username)
 
-	if strings.TrimSpace(username) != m.settings.LoginUser {
+	m.settingsMu.Lock()
+	defer m.settingsMu.Unlock()
+
+	if trimmedUsername != m.settings.LoginUser {
 		return false
 	}
-	return verifyPassword(m.settings.LoginPasswordHash, password)
+	valid, needsUpgrade := verifyPasswordWithUpgrade(m.settings.LoginPasswordHash, password)
+	if !valid {
+		return false
+	}
+	if needsUpgrade {
+		hashed, err := hashPassword(password)
+		if err != nil {
+			log.Printf("Failed to upgrade password hash format: %v", err)
+			return true
+		}
+		m.settings.LoginPasswordHash = hashed
+		if err := m.persistSettings(); err != nil {
+			log.Printf("Failed to persist upgraded password hash: %v", err)
+		}
+	}
+	return true
 }
 
 func (m *Manager) IsUsingDefaultLogin() bool {
