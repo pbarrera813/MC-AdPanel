@@ -202,8 +202,27 @@ const logTrimSize = 200
 const maxPingChecksPerCycle = 6
 const maxWorldRefreshPerCycle = 6
 const extensionCapabilityCacheTTL = 15 * time.Second
+const serverConfigPathSafetyErrorCode = "server_config_path_unsafe"
 
 var ErrExtensionAlreadyInstalled = errors.New("extension already installed")
+
+type ConfigPathSafetyError struct {
+	ServerID string
+	Reason   string
+}
+
+func (e *ConfigPathSafetyError) Error() string {
+	reason := strings.TrimSpace(e.Reason)
+	if reason == "" {
+		reason = "server path is outside managed directories"
+	}
+	return fmt.Sprintf("%s: %s", serverConfigPathSafetyErrorCode, reason)
+}
+
+func IsConfigPathSafetyError(err error) bool {
+	var target *ConfigPathSafetyError
+	return errors.As(err, &target)
+}
 
 var (
 	pingPlayerPluginMetadataKeys = map[string]struct{}{
@@ -253,15 +272,20 @@ var (
 
 // Manager coordinates all Minecraft server processes
 type Manager struct {
-	configs       map[string]*ServerConfig
-	running       map[string]*runningServer
-	dataFile      string
-	settingsFile  string
-	settingsMu    sync.RWMutex
-	settings      AppSettings
-	baseDir       string
-	stopScheduler chan struct{}
-	mu            sync.RWMutex
+	configs            map[string]*ServerConfig
+	running            map[string]*runningServer
+	dataFile           string
+	settingsFile       string
+	settingsMu         sync.RWMutex
+	settings           AppSettings
+	baseDir            string
+	serversRoot        string
+	serversRootReal    string
+	backupsRoot        string
+	backupsRootReal    string
+	quarantinedServers map[string]string
+	stopScheduler      chan struct{}
+	mu                 sync.RWMutex
 }
 
 var hiddenServerRootArtifacts = map[string]struct{}{
@@ -272,8 +296,10 @@ var hiddenServerRootArtifacts = map[string]struct{}{
 // sanitizeName converts a server name to a safe directory name
 func sanitizeName(name string) string {
 	result := strings.ReplaceAll(name, " ", "_")
+	result = strings.TrimSpace(result)
 	result = nameSanitize.ReplaceAllString(result, "")
-	if result == "" {
+	result = strings.Trim(result, "._-")
+	if result == "" || result == "." || result == ".." {
 		result = "server"
 	}
 	return result
@@ -639,26 +665,48 @@ func NewManager(baseDir string) (*Manager, error) {
 	if err := os.MkdirAll(backupsDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create backups directory: %w", err)
 	}
+	serversRootAbs, err := filepath.Abs(filepath.Clean(serversDir))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve servers directory: %w", err)
+	}
+	serversRootReal := serversRootAbs
+	if resolved, resolveErr := filepath.EvalSymlinks(serversRootAbs); resolveErr == nil {
+		serversRootReal = filepath.Clean(resolved)
+	}
+	backupsRootAbs, err := filepath.Abs(filepath.Clean(backupsDir))
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve backups directory: %w", err)
+	}
+	backupsRootReal := backupsRootAbs
+	if resolved, resolveErr := filepath.EvalSymlinks(backupsRootAbs); resolveErr == nil {
+		backupsRootReal = filepath.Clean(resolved)
+	}
 
 	mgr := &Manager{
-		configs:       make(map[string]*ServerConfig),
-		running:       make(map[string]*runningServer),
-		dataFile:      filepath.Join(dataDir, "servers.json"),
-		settingsFile:  filepath.Join(dataDir, "settings.json"),
-		baseDir:       baseDir,
-		stopScheduler: make(chan struct{}),
+		configs:            make(map[string]*ServerConfig),
+		running:            make(map[string]*runningServer),
+		dataFile:           filepath.Join(dataDir, "servers.json"),
+		settingsFile:       filepath.Join(dataDir, "settings.json"),
+		baseDir:            baseDir,
+		serversRoot:        serversRootAbs,
+		serversRootReal:    serversRootReal,
+		backupsRoot:        backupsRootAbs,
+		backupsRootReal:    backupsRootReal,
+		quarantinedServers: make(map[string]string),
+		stopScheduler:      make(chan struct{}),
 	}
 
 	if err := mgr.load(); err != nil {
 		return nil, err
 	}
+	mgr.quarantineUnsafeServerConfigs()
+	mgr.migrateBackupsToStableIDs()
 	mgr.migrateLegacyServerArtifacts()
 	if err := mgr.loadSettings(); err != nil {
 		return nil, err
 	}
 	if mgr.IsUsingDefaultLogin() {
-		log.Printf("Auth initialized with default credentials: username=%q password=%q", "mcpanel", "mcpanel")
-		log.Printf("Change default credentials in System Settings after first login.")
+		log.Printf("Auth initialized with default credentials. Change them in System Settings before exposing the panel.")
 	}
 
 	for id := range mgr.configs {
@@ -854,6 +902,12 @@ func (m *Manager) load() error {
 	}
 
 	for _, cfg := range configs {
+		if cfg == nil {
+			continue
+		}
+		if strings.TrimSpace(cfg.ID) == "" {
+			cfg.ID = uuid.New().String()[:8]
+		}
 		m.configs[cfg.ID] = cfg
 	}
 
@@ -897,11 +951,15 @@ func (m *Manager) CreateServer(name, serverType, version string, port int, minRA
 
 	id := uuid.New().String()[:8]
 	dirName := sanitizeName(name)
-	serverDir := filepath.Join(m.baseDir, "Servers", dirName)
+	serverDir := filepath.Join(m.serversRoot, dirName)
 
 	// If directory already exists, append short ID to avoid collision
 	if _, err := os.Stat(serverDir); err == nil {
-		serverDir = filepath.Join(m.baseDir, "Servers", dirName+"_"+id)
+		serverDir = filepath.Join(m.serversRoot, dirName+"_"+id)
+	}
+	serverDir = filepath.Clean(serverDir)
+	if err := m.validateManagedServerDir(serverDir); err != nil {
+		return nil, fmt.Errorf("invalid server directory: %w", err)
 	}
 
 	if err := os.MkdirAll(serverDir, 0755); err != nil {
@@ -1042,11 +1100,14 @@ func writeManagedUserJVMArgs(path string, extraFlags []string) error {
 // StartServer starts the Minecraft process for the given server
 func (m *Manager) StartServer(id string) error {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	rs, rsOk := m.running[id]
 	m.mu.RUnlock()
 
-	if !ok || !rsOk {
+	if err != nil {
+		return err
+	}
+	if !rsOk {
 		return fmt.Errorf("server %s not found", id)
 	}
 
@@ -1183,11 +1244,14 @@ func (m *Manager) StartServer(id string) error {
 // They are automatically restored when the server stops.
 func (m *Manager) StartServerSafeMode(id string) error {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	rs, rsOk := m.running[id]
 	m.mu.RUnlock()
 
-	if !ok || !rsOk {
+	if err != nil {
+		return err
+	}
+	if !rsOk {
 		return fmt.Errorf("server %s not found", id)
 	}
 
@@ -1649,10 +1713,13 @@ func (m *Manager) collectMetrics(id string, rs *runningServer) {
 // StopServer gracefully stops a Minecraft server
 func (m *Manager) StopServer(id string) error {
 	m.mu.RLock()
-	cfg := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	rs, ok := m.running[id]
 	m.mu.RUnlock()
 
+	if err != nil {
+		return err
+	}
 	if !ok {
 		return fmt.Errorf("server %s not found", id)
 	}
@@ -1704,6 +1771,10 @@ func (m *Manager) StopServer(id string) error {
 // SendCommand writes a command to the server's stdin
 func (m *Manager) SendCommand(id, command string) error {
 	m.mu.RLock()
+	if _, err := m.serverConfigForOperationLocked(id); err != nil {
+		m.mu.RUnlock()
+		return err
+	}
 	rs, ok := m.running[id]
 	m.mu.RUnlock()
 
@@ -1856,8 +1927,8 @@ func (m *Manager) GetStatus(id string) (*ServerInfo, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	if _, ok := m.configs[id]; !ok {
-		return nil, fmt.Errorf("server %s not found", id)
+	if _, err := m.serverConfigForOperationLocked(id); err != nil {
+		return nil, err
 	}
 
 	return m.serverInfo(id), nil
@@ -2032,9 +2103,9 @@ func (m *Manager) UpdateSettings(id, minRAM, maxRAM string, maxPlayers int, port
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	cfg, ok := m.configs[id]
-	if !ok {
-		return nil, fmt.Errorf("server %s not found", id)
+	cfg, err := m.serverConfigForOperationLocked(id)
+	if err != nil {
+		return nil, err
 	}
 
 	rs := m.running[id]
@@ -2089,9 +2160,13 @@ func (m *Manager) UpdateVersion(id, version string) (*ServerInfo, error) {
 	}
 
 	m.mu.Lock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	rs, rsOk := m.running[id]
-	if !ok || !rsOk {
+	if err != nil {
+		m.mu.Unlock()
+		return nil, err
+	}
+	if !rsOk {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("server %s not found", id)
 	}
@@ -2128,9 +2203,9 @@ func (m *Manager) SetAutoStart(id string, enabled bool) (*ServerInfo, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	cfg, ok := m.configs[id]
-	if !ok {
-		return nil, fmt.Errorf("server %s not found", id)
+	cfg, err := m.serverConfigForOperationLocked(id)
+	if err != nil {
+		return nil, err
 	}
 
 	cfg.AutoStart = enabled
@@ -2144,9 +2219,9 @@ func (m *Manager) SetFlags(id, flags string, alwaysPreTouch bool) (*ServerInfo, 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	cfg, ok := m.configs[id]
-	if !ok {
-		return nil, fmt.Errorf("server %s not found", id)
+	cfg, err := m.serverConfigForOperationLocked(id)
+	if err != nil {
+		return nil, err
 	}
 
 	cfg.Flags = flags
@@ -2161,9 +2236,9 @@ func (m *Manager) RenameServer(id, name string) (*ServerInfo, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	cfg, ok := m.configs[id]
-	if !ok {
-		return nil, fmt.Errorf("server %s not found", id)
+	cfg, err := m.serverConfigForOperationLocked(id)
+	if err != nil {
+		return nil, err
 	}
 
 	name = strings.TrimSpace(name)
@@ -2174,6 +2249,12 @@ func (m *Manager) RenameServer(id, name string) (*ServerInfo, error) {
 	oldBackupDir := m.backupDir(cfg)
 	cfg.Name = name
 	newBackupDir := m.backupDir(cfg)
+	if err := m.validateManagedBackupDir(oldBackupDir); err != nil {
+		return nil, err
+	}
+	if err := m.validateManagedBackupDir(newBackupDir); err != nil {
+		return nil, err
+	}
 
 	if oldBackupDir != newBackupDir {
 		if err := m.migrateBackupDir(oldBackupDir, newBackupDir); err != nil {
@@ -2189,6 +2270,13 @@ func (m *Manager) RenameServer(id, name string) (*ServerInfo, error) {
 }
 
 func (m *Manager) migrateBackupDir(oldDir, newDir string) error {
+	if err := m.validateManagedBackupDir(oldDir); err != nil {
+		return err
+	}
+	if err := m.validateManagedBackupDir(newDir); err != nil {
+		return err
+	}
+
 	if _, err := os.Stat(oldDir); err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -2258,9 +2346,12 @@ func (m *Manager) DeleteServer(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	cfg, cfgOk := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
+	if err != nil {
+		return err
+	}
 	rs, rsOk := m.running[id]
-	if !cfgOk || !rsOk {
+	if !rsOk {
 		return fmt.Errorf("server %s not found", id)
 	}
 
@@ -2270,6 +2361,9 @@ func (m *Manager) DeleteServer(id string) error {
 
 	if status == "Running" || status == "Booting" || status == "Installing" {
 		return fmt.Errorf("cannot delete server %s while it is %s", id, status)
+	}
+	if err := m.validateManagedServerDir(cfg.Dir); err != nil {
+		return m.configPathErrorLocked(id, err.Error())
 	}
 
 	// Delete server directory
@@ -2281,12 +2375,16 @@ func (m *Manager) DeleteServer(id string) error {
 
 	// Delete backup directory
 	backupPath := m.backupDir(cfg)
+	if err := m.validateManagedBackupDir(backupPath); err != nil {
+		return fmt.Errorf("failed backup directory safety check: %w", err)
+	}
 	if err := os.RemoveAll(backupPath); err != nil {
 		log.Printf("Warning: failed to delete backup directory %s: %v", backupPath, err)
 	}
 
 	delete(m.configs, id)
 	delete(m.running, id)
+	delete(m.quarantinedServers, id)
 
 	return m.persist()
 }
@@ -2296,35 +2394,274 @@ func (m *Manager) GetServerDir(id string) (string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	cfg, ok := m.configs[id]
-	if !ok {
-		return "", fmt.Errorf("server %s not found", id)
+	cfg, err := m.serverConfigForOperationLocked(id)
+	if err != nil {
+		return "", err
 	}
 	return cfg.Dir, nil
 }
 
+func (m *Manager) quarantineReasonLocked(id string) string {
+	return strings.TrimSpace(m.quarantinedServers[id])
+}
+
+func (m *Manager) configPathErrorLocked(id, fallbackReason string) error {
+	reason := strings.TrimSpace(fallbackReason)
+	if reason == "" {
+		reason = m.quarantineReasonLocked(id)
+	}
+	if reason == "" {
+		reason = "server path is outside managed directories"
+	}
+	return &ConfigPathSafetyError{ServerID: id, Reason: reason}
+}
+
+func (m *Manager) serverConfigForOperationLocked(id string) (*ServerConfig, error) {
+	cfg, ok := m.configs[id]
+	if !ok {
+		return nil, fmt.Errorf("server %s not found", id)
+	}
+	if reason := m.quarantineReasonLocked(id); reason != "" {
+		return nil, m.configPathErrorLocked(id, reason)
+	}
+	if err := m.validateManagedServerDir(cfg.Dir); err != nil {
+		return nil, m.configPathErrorLocked(id, err.Error())
+	}
+	return cfg, nil
+}
+
+func (m *Manager) EnsureServerOperational(id string) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, err := m.serverConfigForOperationLocked(id)
+	return err
+}
+
+func (m *Manager) validateManagedServerDir(serverDir string) error {
+	if strings.TrimSpace(serverDir) == "" {
+		return fmt.Errorf("server directory is empty")
+	}
+	serverAbs, err := filepath.Abs(filepath.Clean(serverDir))
+	if err != nil {
+		return err
+	}
+	if err := ensurePathWithinBase(m.serversRoot, serverAbs); err != nil {
+		return fmt.Errorf("server directory escapes managed root")
+	}
+	resolved, err := resolveForContainmentCheck(serverAbs)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil {
+		if err := ensurePathWithinBase(m.serversRootReal, resolved); err != nil {
+			return fmt.Errorf("server directory symlink escapes managed root")
+		}
+	}
+	return nil
+}
+
+func (m *Manager) validateManagedBackupDir(backupDir string) error {
+	if strings.TrimSpace(backupDir) == "" {
+		return fmt.Errorf("backup directory is empty")
+	}
+	backupAbs, err := filepath.Abs(filepath.Clean(backupDir))
+	if err != nil {
+		return err
+	}
+	if err := ensurePathWithinBase(m.backupsRoot, backupAbs); err != nil {
+		return fmt.Errorf("backup directory escapes managed root")
+	}
+	resolved, err := resolveForContainmentCheck(backupAbs)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil {
+		if err := ensurePathWithinBase(m.backupsRootReal, resolved); err != nil {
+			return fmt.Errorf("backup directory symlink escapes managed root")
+		}
+	}
+	return nil
+}
+
+func (m *Manager) quarantineUnsafeServerConfigs() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, cfg := range m.configs {
+		if cfg == nil {
+			m.quarantinedServers[id] = "server configuration is missing"
+			continue
+		}
+		if err := m.validateManagedServerDir(cfg.Dir); err != nil {
+			reason := err.Error()
+			m.quarantinedServers[id] = reason
+			log.Printf("[%s] quarantined server config: %s", id, reason)
+		}
+	}
+}
+
+func (m *Manager) backupFolderKey(cfg *ServerConfig) string {
+	if cfg == nil {
+		return "server"
+	}
+	id := sanitizeName(strings.TrimSpace(cfg.ID))
+	if id == "" || id == "server" {
+		id = sanitizeName(strings.TrimSpace(cfg.Name))
+	}
+	if id == "" || id == "server" {
+		id = "server"
+	}
+	return id
+}
+
+func (m *Manager) legacyBackupDir(cfg *ServerConfig) string {
+	if cfg == nil {
+		return filepath.Join(m.backupsRoot, "server")
+	}
+	return filepath.Join(m.backupsRoot, sanitizeName(cfg.Name))
+}
+
+func (m *Manager) migrateBackupsToStableIDs() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, cfg := range m.configs {
+		if cfg == nil {
+			continue
+		}
+		oldDir := m.legacyBackupDir(cfg)
+		newDir := m.backupDir(cfg)
+		if samePath(oldDir, newDir) {
+			continue
+		}
+		if err := m.validateManagedBackupDir(oldDir); err != nil {
+			continue
+		}
+		if err := m.validateManagedBackupDir(newDir); err != nil {
+			continue
+		}
+		if _, err := os.Stat(oldDir); err != nil {
+			continue
+		}
+		if err := m.migrateBackupDir(oldDir, newDir); err != nil {
+			log.Printf("[%s] failed to migrate backup directory to stable key: %v", cfg.Name, err)
+		}
+	}
+}
+
+func ensurePathWithinBase(baseAbs, targetAbs string) error {
+	rel, err := filepath.Rel(baseAbs, targetAbs)
+	if err != nil {
+		return fmt.Errorf("invalid path: %w", err)
+	}
+	if rel == "." {
+		return nil
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return fmt.Errorf("invalid path: access denied")
+	}
+	return nil
+}
+
+func samePath(a, b string) bool {
+	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+}
+
+func nearestExistingPath(path string) (string, error) {
+	current := filepath.Clean(path)
+	for {
+		if _, err := os.Lstat(current); err == nil {
+			return current, nil
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", os.ErrNotExist
+		}
+		current = parent
+	}
+}
+
+func resolveForContainmentCheck(targetPath string) (string, error) {
+	existing, err := nearestExistingPath(targetPath)
+	if err != nil {
+		return "", err
+	}
+
+	resolvedExisting, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		return "", err
+	}
+	resolvedExisting = filepath.Clean(resolvedExisting)
+	if existing == targetPath {
+		return resolvedExisting, nil
+	}
+
+	rel, err := filepath.Rel(existing, targetPath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(filepath.Join(resolvedExisting, rel)), nil
+}
+
 // SafePath validates a subpath within a server directory to prevent path traversal
 func SafePath(serverDir, subPath string) (string, error) {
-	cleaned := filepath.Clean(subPath)
-	if cleaned == "." || cleaned == "" {
-		return serverDir, nil
+	serverDir = strings.TrimSpace(serverDir)
+	if serverDir == "" {
+		return "", fmt.Errorf("invalid path: empty base directory")
 	}
-	fullPath := filepath.Join(serverDir, cleaned)
-	absServer, _ := filepath.Abs(serverDir)
-	absFull, _ := filepath.Abs(fullPath)
-	if !strings.HasPrefix(absFull, absServer) {
+
+	baseAbs, err := filepath.Abs(filepath.Clean(serverDir))
+	if err != nil {
+		return "", err
+	}
+
+	baseResolved, err := filepath.EvalSymlinks(baseAbs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			baseResolved = baseAbs
+		} else {
+			return "", err
+		}
+	}
+	baseResolved = filepath.Clean(baseResolved)
+
+	cleanedSubPath := strings.TrimSpace(subPath)
+	if cleanedSubPath == "" {
+		cleanedSubPath = "."
+	}
+	if strings.ContainsRune(cleanedSubPath, '\x00') {
 		return "", fmt.Errorf("invalid path: access denied")
 	}
-	return fullPath, nil
+	if filepath.IsAbs(cleanedSubPath) {
+		return "", fmt.Errorf("invalid path: access denied")
+	}
+	if filepath.VolumeName(cleanedSubPath) != "" {
+		return "", fmt.Errorf("invalid path: access denied")
+	}
+
+	candidateAbs := filepath.Clean(filepath.Join(baseAbs, filepath.Clean(cleanedSubPath)))
+	if err := ensurePathWithinBase(baseAbs, candidateAbs); err != nil {
+		return "", fmt.Errorf("invalid path: access denied")
+	}
+
+	candidateResolved, err := resolveForContainmentCheck(candidateAbs)
+	if err != nil {
+		return "", err
+	}
+	if err := ensurePathWithinBase(baseResolved, candidateResolved); err != nil {
+		return "", fmt.Errorf("invalid path: access denied")
+	}
+	return candidateResolved, nil
 }
 
 // GetFilePath returns the absolute safe path for a file within a server's directory
 func (m *Manager) GetFilePath(id, subPath string) (string, error) {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return "", fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return "", err
 	}
 	return SafePath(cfg.Dir, subPath)
 }
@@ -2358,10 +2695,10 @@ func uniqueFileNameInDir(dirPath, fileName string) (string, error) {
 // ResolveUploadSubPath returns a safe, non-conflicting path for an uploaded file.
 func (m *Manager) ResolveUploadSubPath(id, subPath string) (string, error) {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return "", fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return "", err
 	}
 
 	cleaned := filepath.Clean(subPath)
@@ -2464,10 +2801,10 @@ func sourceForFile(sources map[string]string, fileName string) string {
 // ListPlugins scans the plugins/ or mods/ directory for .jar files
 func (m *Manager) ListPlugins(id string) ([]PluginInfo, error) {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return nil, err
 	}
 
 	pluginsDir := extensionsDir(cfg)
@@ -2528,25 +2865,54 @@ func (m *Manager) ListPlugins(id string) ([]PluginInfo, error) {
 // UploadPlugin saves a .jar file to the server's plugins/mods directory.
 // If a file with the same name exists, callers must choose whether to replace or skip it.
 func (m *Manager) UploadPlugin(id, fileName string, data []byte, conflictAction string) (string, string, error) {
+	tmpFile, err := os.CreateTemp("", "orexa-plugin-upload-*.jar")
+	if err != nil {
+		return "", "", err
+	}
+	tmpPath := tmpFile.Name()
+	defer func() {
+		_ = os.Remove(tmpPath)
+	}()
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		return "", "", err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return "", "", err
+	}
+	return m.UploadPluginFromFile(id, fileName, tmpPath, conflictAction)
+}
+
+// UploadPluginFromFile installs a plugin/mod jar from a local staged file path.
+func (m *Manager) UploadPluginFromFile(id, fileName, sourcePath, conflictAction string) (string, string, error) {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return "", "", fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return "", "", err
 	}
 
+	fileName = filepath.Base(strings.TrimSpace(fileName))
+	if fileName == "" || fileName == "." {
+		return "", "", fmt.Errorf("invalid plugin file name")
+	}
 	if !strings.HasSuffix(strings.ToLower(fileName), ".jar") {
 		return "", "", fmt.Errorf("only .jar files are allowed")
 	}
+	if _, err := os.Stat(sourcePath); err != nil {
+		return "", "", err
+	}
 
 	pDir := extensionsDir(cfg)
-	os.MkdirAll(pDir, 0755)
+	if err := os.MkdirAll(pDir, 0755); err != nil {
+		return "", "", err
+	}
 	pluginPath, err := SafePath(pDir, fileName)
 	if err != nil {
 		return "", "", err
 	}
 
-	uploadedMetadataKey := extractExtensionMetadataKeyFromBytes(data)
+	uploadedMetadataKey := extractExtensionMetadataKeyFromFile(sourcePath)
 	if uploadedMetadataKey != "" {
 		entries, err := os.ReadDir(pDir)
 		if err != nil && !os.IsNotExist(err) {
@@ -2589,7 +2955,7 @@ func (m *Manager) UploadPlugin(id, fileName string, data []byte, conflictAction 
 		return "", "", statErr
 	}
 
-	if err := os.WriteFile(pluginPath, data, 0644); err != nil {
+	if err := moveOrCopyFile(sourcePath, pluginPath, conflictAction == "replace"); err != nil {
 		return "", "", err
 	}
 	status := "uploaded"
@@ -2599,13 +2965,61 @@ func (m *Manager) UploadPlugin(id, fileName string, data []byte, conflictAction 
 	return fileName, status, nil
 }
 
+func moveOrCopyFile(sourcePath, targetPath string, replace bool) error {
+	if replace {
+		if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	if err := os.Rename(sourcePath, targetPath); err == nil {
+		return os.Chmod(targetPath, 0644)
+	}
+
+	src, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	targetDir := filepath.Dir(targetPath)
+	tmpFile, err := os.CreateTemp(targetDir, ".upload-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	defer func() {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+	}()
+
+	if _, err := io.Copy(tmpFile, src); err != nil {
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, 0644); err != nil {
+		return err
+	}
+	if replace {
+		if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		return err
+	}
+	_ = os.Remove(sourcePath)
+	return nil
+}
+
 // DeletePlugin removes a plugin jar from the server's plugins directory
 func (m *Manager) DeletePlugin(id, fileName string) error {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return err
 	}
 
 	pluginPath, err := SafePath(extensionsDir(cfg), fileName)
@@ -2631,10 +3045,10 @@ func (m *Manager) DeletePlugin(id, fileName string) error {
 // TogglePlugin enables/disables a plugin by renaming .jar <-> .jar.disabled
 func (m *Manager) TogglePlugin(id, fileName string) (*PluginInfo, error) {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return nil, err
 	}
 
 	pluginsDir := extensionsDir(cfg)
@@ -2716,19 +3130,22 @@ func (m *Manager) TogglePlugin(id, fileName string) (*PluginInfo, error) {
 
 // backupDir returns the centralized backup directory for a server
 func (m *Manager) backupDir(cfg *ServerConfig) string {
-	return filepath.Join(m.baseDir, "Backups", sanitizeName(cfg.Name))
+	return filepath.Join(m.backupsRoot, m.backupFolderKey(cfg))
 }
 
 // ListBackups returns all backup archives for a server
 func (m *Manager) ListBackups(id string) ([]BackupInfo, error) {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return nil, err
 	}
 
 	backupsDir := m.backupDir(cfg)
+	if err := m.validateManagedBackupDir(backupsDir); err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(backupsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -2763,13 +3180,19 @@ func (m *Manager) ListBackups(id string) ([]BackupInfo, error) {
 // CreateBackup creates a tar.gz archive of the server directory
 func (m *Manager) CreateBackup(id string) (*BackupInfo, error) {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.validateManagedServerDir(cfg.Dir); err != nil {
+		return nil, m.configPathErrorLocked(id, err.Error())
 	}
 
 	backupsDir := m.backupDir(cfg)
+	if err := m.validateManagedBackupDir(backupsDir); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(backupsDir, 0755); err != nil {
 		return nil, err
 	}
@@ -2798,13 +3221,17 @@ func (m *Manager) CreateBackup(id string) (*BackupInfo, error) {
 // DeleteBackup removes a backup archive
 func (m *Manager) DeleteBackup(id, fileName string) error {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return err
+	}
+	backupsDir := m.backupDir(cfg)
+	if err := m.validateManagedBackupDir(backupsDir); err != nil {
+		return err
 	}
 
-	backupPath, err := SafePath(m.backupDir(cfg), fileName)
+	backupPath, err := SafePath(backupsDir, fileName)
 	if err != nil {
 		return err
 	}
@@ -2815,13 +3242,17 @@ func (m *Manager) DeleteBackup(id, fileName string) error {
 // GetBackupPath returns the full filesystem path for downloading a backup
 func (m *Manager) GetBackupPath(id, fileName string) (string, error) {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return "", fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return "", err
+	}
+	backupsDir := m.backupDir(cfg)
+	if err := m.validateManagedBackupDir(backupsDir); err != nil {
+		return "", err
 	}
 
-	backupPath, err := SafePath(m.backupDir(cfg), fileName)
+	backupPath, err := SafePath(backupsDir, fileName)
 	if err != nil {
 		return "", err
 	}
@@ -2836,10 +3267,13 @@ func (m *Manager) GetBackupPath(id, fileName string) (string, error) {
 // RestoreBackup extracts a backup archive into the server directory (server must be stopped)
 func (m *Manager) RestoreBackup(id, fileName string) error {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	rs, rsOk := m.running[id]
 	m.mu.RUnlock()
-	if !ok || !rsOk {
+	if err != nil {
+		return err
+	}
+	if !rsOk {
 		return fmt.Errorf("server %s not found", id)
 	}
 
@@ -2849,8 +3283,15 @@ func (m *Manager) RestoreBackup(id, fileName string) error {
 	if status != "Stopped" && status != "Crashed" && status != "Error" {
 		return fmt.Errorf("server must be stopped before restoring a backup")
 	}
+	if err := m.validateManagedServerDir(cfg.Dir); err != nil {
+		return m.configPathErrorLocked(id, err.Error())
+	}
+	backupsDir := m.backupDir(cfg)
+	if err := m.validateManagedBackupDir(backupsDir); err != nil {
+		return err
+	}
 
-	backupPath, err := SafePath(m.backupDir(cfg), fileName)
+	backupPath, err := SafePath(backupsDir, fileName)
 	if err != nil {
 		return err
 	}
@@ -2859,12 +3300,19 @@ func (m *Manager) RestoreBackup(id, fileName string) error {
 	}
 
 	// Clear server directory contents
-	entries, err := os.ReadDir(cfg.Dir)
+	serverRoot, err := SafePath(cfg.Dir, ".")
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(serverRoot)
 	if err != nil {
 		return fmt.Errorf("failed to read server directory: %w", err)
 	}
 	for _, entry := range entries {
-		target := filepath.Join(cfg.Dir, entry.Name())
+		target := filepath.Join(serverRoot, entry.Name())
+		if err := ensurePathWithinBase(serverRoot, filepath.Clean(target)); err != nil {
+			return fmt.Errorf("failed to clear server directory entry %q: path safety check failed", entry.Name())
+		}
 		if err := os.RemoveAll(target); err != nil {
 			return fmt.Errorf("failed to clear server directory entry %q: %w", entry.Name(), err)
 		}
@@ -2885,9 +3333,9 @@ func (m *Manager) SetBackupSchedule(id, schedule string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	cfg, ok := m.configs[id]
-	if !ok {
-		return fmt.Errorf("server %s not found", id)
+	cfg, err := m.serverConfigForOperationLocked(id)
+	if err != nil {
+		return err
 	}
 
 	valid := map[string]bool{"": true, "daily": true, "weekly": true, "monthly": true, "sixmonths": true, "yearly": true}
@@ -2911,9 +3359,9 @@ func (m *Manager) GetBackupSchedule(id string) (map[string]string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	cfg, ok := m.configs[id]
-	if !ok {
-		return nil, fmt.Errorf("server %s not found", id)
+	cfg, err := m.serverConfigForOperationLocked(id)
+	if err != nil {
+		return nil, err
 	}
 
 	result := map[string]string{
@@ -3013,10 +3461,10 @@ func (m *Manager) checkScheduledBackups() {
 // ListFiles returns directory contents at the given subpath
 func (m *Manager) ListFiles(id, subPath string) ([]FileEntry, error) {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return nil, err
 	}
 
 	dirPath, err := SafePath(cfg.Dir, subPath)
@@ -3073,10 +3521,10 @@ func (m *Manager) ListFiles(id, subPath string) ([]FileEntry, error) {
 // ReadFileContent reads a file's content within a server directory
 func (m *Manager) ReadFileContent(id, subPath string) ([]byte, error) {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return nil, err
 	}
 
 	filePath, err := SafePath(cfg.Dir, subPath)
@@ -3090,10 +3538,10 @@ func (m *Manager) ReadFileContent(id, subPath string) ([]byte, error) {
 // WriteFileContent writes content to a file within a server directory
 func (m *Manager) WriteFileContent(id, subPath string, content []byte) error {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return err
 	}
 
 	filePath, err := SafePath(cfg.Dir, subPath)
@@ -3107,10 +3555,10 @@ func (m *Manager) WriteFileContent(id, subPath string, content []byte) error {
 // DeletePath removes a file or directory within a server directory
 func (m *Manager) DeletePath(id, subPath string) error {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return err
 	}
 
 	targetPath, err := SafePath(cfg.Dir, subPath)
@@ -3118,9 +3566,11 @@ func (m *Manager) DeletePath(id, subPath string) error {
 		return err
 	}
 
-	absServer, _ := filepath.Abs(cfg.Dir)
-	absTarget, _ := filepath.Abs(targetPath)
-	if absServer == absTarget {
+	serverRoot, err := SafePath(cfg.Dir, ".")
+	if err != nil {
+		return err
+	}
+	if samePath(serverRoot, targetPath) {
 		return fmt.Errorf("cannot delete server root directory")
 	}
 
@@ -3130,10 +3580,10 @@ func (m *Manager) DeletePath(id, subPath string) error {
 // CreateDirectory creates a directory within a server directory
 func (m *Manager) CreateDirectory(id, subPath string) error {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return err
 	}
 
 	dirPath, err := SafePath(cfg.Dir, subPath)
@@ -3147,10 +3597,10 @@ func (m *Manager) CreateDirectory(id, subPath string) error {
 // RenamePath renames a file or directory within a server directory
 func (m *Manager) RenamePath(id, oldSubPath, newName string) error {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return err
 	}
 
 	oldPath, err := SafePath(cfg.Dir, oldSubPath)
@@ -3183,6 +3633,10 @@ func (m *Manager) RenamePath(id, oldSubPath, newName string) error {
 
 func (m *Manager) listPlayersSnapshot(id string) ([]PlayerInfo, bool, time.Time, error) {
 	m.mu.RLock()
+	if _, err := m.serverConfigForOperationLocked(id); err != nil {
+		m.mu.RUnlock()
+		return nil, false, time.Time{}, err
+	}
 	rs, ok := m.running[id]
 	m.mu.RUnlock()
 	if !ok {
@@ -3243,11 +3697,11 @@ func (m *Manager) ListPlayersWithFreshness(id string) ([]PlayerInfo, bool, time.
 
 func (m *Manager) GetPingSupport(id string) (bool, string, error) {
 	m.mu.RLock()
-	cfg, cfgOk := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	rs, rsOk := m.running[id]
 	m.mu.RUnlock()
-	if !cfgOk {
-		return false, "", fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return false, "", err
 	}
 
 	if rsOk {
@@ -3307,11 +3761,14 @@ func (m *Manager) KillPlayer(id, playerName string) error {
 // ScheduleRestart schedules a server restart after delaySeconds
 func (m *Manager) ScheduleRestart(id string, delaySeconds int) error {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	rs, rsOk := m.running[id]
 	m.mu.RUnlock()
 
-	if !ok || !rsOk {
+	if err != nil {
+		return err
+	}
+	if !rsOk {
 		return fmt.Errorf("server %s not found", id)
 	}
 
@@ -3344,6 +3801,10 @@ func (m *Manager) ScheduleRestart(id string, delaySeconds int) error {
 // CancelRestart cancels a scheduled restart
 func (m *Manager) CancelRestart(id string) error {
 	m.mu.RLock()
+	if _, err := m.serverConfigForOperationLocked(id); err != nil {
+		m.mu.RUnlock()
+		return err
+	}
 	rs, ok := m.running[id]
 	m.mu.RUnlock()
 
@@ -3368,11 +3829,14 @@ func (m *Manager) CancelRestart(id string) error {
 // ScheduleStop schedules a graceful server stop after delaySeconds.
 func (m *Manager) ScheduleStop(id string, delaySeconds int) error {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	rs, rsOk := m.running[id]
 	m.mu.RUnlock()
 
-	if !ok || !rsOk {
+	if err != nil {
+		return err
+	}
+	if !rsOk {
 		return fmt.Errorf("server %s not found", id)
 	}
 
@@ -3409,10 +3873,10 @@ func (m *Manager) ScheduleStop(id string, delaySeconds int) error {
 // ListCrashReports scans the crash-reports/ directory
 func (m *Manager) ListCrashReports(id string) ([]CrashReport, error) {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return nil, err
 	}
 
 	crashDir := filepath.Join(cfg.Dir, "crash-reports")
@@ -3474,10 +3938,10 @@ func extractCrashCause(filePath string) string {
 // ReadCrashReport returns the content of a crash report file
 func (m *Manager) ReadCrashReport(id, fileName string) ([]byte, error) {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return nil, err
 	}
 
 	filePath, err := SafePath(filepath.Join(cfg.Dir, "crash-reports"), fileName)
@@ -3495,10 +3959,10 @@ func (m *Manager) ReadCrashReport(id, fileName string) ([]byte, error) {
 // ListLogFiles returns files under the server's logs/ directory
 func (m *Manager) ListLogFiles(id string) ([]FileEntry, error) {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return nil, err
 	}
 
 	logsDir := filepath.Join(cfg.Dir, "logs")
@@ -3543,10 +4007,10 @@ func (m *Manager) ListLogFiles(id string) ([]FileEntry, error) {
 // ReadLogFile returns the (possibly decompressed) content of a log file
 func (m *Manager) ReadLogFile(id, fileName string) ([]byte, error) {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return nil, err
 	}
 
 	filePath, err := SafePath(filepath.Join(cfg.Dir, "logs"), fileName)
@@ -3579,10 +4043,10 @@ func (m *Manager) ReadLogFile(id, fileName string) ([]byte, error) {
 // CopyCrashReport duplicates a crash report file with a "-copy" suffix
 func (m *Manager) CopyCrashReport(id, fileName string) (string, error) {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return "", fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return "", err
 	}
 
 	crashDir := filepath.Join(cfg.Dir, "crash-reports")
@@ -3615,10 +4079,10 @@ func (m *Manager) CopyCrashReport(id, fileName string) (string, error) {
 // DeleteCrashReport deletes a crash report file
 func (m *Manager) DeleteCrashReport(id, fileName string) error {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	m.mu.RUnlock()
-	if !ok {
-		return fmt.Errorf("server %s not found", id)
+	if err != nil {
+		return err
 	}
 
 	filePath, err := SafePath(filepath.Join(cfg.Dir, "crash-reports"), fileName)
@@ -3636,10 +4100,10 @@ func (m *Manager) DeleteCrashReport(id, fileName string) error {
 // CloneServer creates a new server by copying data from a source server
 func (m *Manager) CloneServer(sourceID, name string, port int, copyPlugins, copyWorlds, copyConfig bool) (*ServerInfo, error) {
 	m.mu.RLock()
-	sourceCfg, ok := m.configs[sourceID]
+	sourceCfg, err := m.serverConfigForOperationLocked(sourceID)
 	m.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("source server %s not found", sourceID)
+	if err != nil {
+		return nil, err
 	}
 
 	// Create the new server first (this handles port conflicts, dir creation, etc.)
@@ -3852,11 +4316,14 @@ func (m *Manager) installServerJar(id, serverType, version string) {
 // RetryInstall retries a failed installation
 func (m *Manager) RetryInstall(id string) error {
 	m.mu.RLock()
-	cfg, ok := m.configs[id]
+	cfg, err := m.serverConfigForOperationLocked(id)
 	rs, rsOk := m.running[id]
 	m.mu.RUnlock()
 
-	if !ok || !rsOk {
+	if err != nil {
+		return err
+	}
+	if !rsOk {
 		return fmt.Errorf("server %s not found", id)
 	}
 
