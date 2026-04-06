@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -23,8 +23,9 @@ const (
 )
 
 type sessionRecord struct {
-	Username string    `json:"username"`
-	Expires  time.Time `json:"expires"`
+	Username           string    `json:"username"`
+	Expires            time.Time `json:"expires"`
+	MustChangePassword bool      `json:"mustChangePassword"`
 }
 
 type loginAttempt struct {
@@ -34,18 +35,22 @@ type loginAttempt struct {
 }
 
 type AuthHandler struct {
-	mgr           *minecraft.Manager
-	mu            sync.RWMutex
-	sessions      map[string]sessionRecord
-	loginAttempts map[string]loginAttempt
+	mgr            *minecraft.Manager
+	mu             sync.RWMutex
+	sessions       map[string]sessionRecord
+	loginAttempts  map[string]loginAttempt
+	trustedProxies *trustedProxySet
+	csrfMode       string
 }
 
 func NewAuthHandler(mgr *minecraft.Manager, baseDir string) *AuthHandler {
 	_ = baseDir
 	return &AuthHandler{
-		mgr:           mgr,
-		sessions:      make(map[string]sessionRecord),
-		loginAttempts: make(map[string]loginAttempt),
+		mgr:            mgr,
+		sessions:       make(map[string]sessionRecord),
+		loginAttempts:  make(map[string]loginAttempt),
+		trustedProxies: newTrustedProxySetFromEnv(),
+		csrfMode:       csrfModeFromEnv(),
 	}
 }
 
@@ -58,29 +63,29 @@ func (h *AuthHandler) cleanupExpiredSessionsLocked() {
 	}
 }
 
-func clientIP(r *http.Request) string {
+func (h *AuthHandler) clientIP(r *http.Request) string {
 	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
-		parts := strings.Split(xff, ",")
-		if len(parts) > 0 {
-			ip := strings.TrimSpace(parts[0])
-			if ip != "" {
-				return ip
-			}
-		}
+		return realClientIPFromXFF(r.RemoteAddr, xff, h.trustedProxies)
 	}
-	addr := strings.TrimSpace(r.RemoteAddr)
-	host, _, err := net.SplitHostPort(addr)
-	if err == nil && host != "" {
-		return host
+	if ip := remoteAddrIP(r.RemoteAddr); ip != nil {
+		return ip.String()
 	}
-	return addr
+	return strings.TrimSpace(r.RemoteAddr)
 }
 
-func isSecureRequest(r *http.Request) bool {
+func (h *AuthHandler) isSecureRequest(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
-	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
+	if !h.trustedProxies.isTrusted(r.RemoteAddr) {
+		return false
+	}
+	protoHeader := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
+	if protoHeader == "" {
+		return false
+	}
+	firstProto := strings.TrimSpace(strings.Split(protoHeader, ",")[0])
+	return strings.EqualFold(firstProto, "https")
 }
 
 func (h *AuthHandler) loginBlocked(ip string) (bool, time.Duration) {
@@ -119,7 +124,7 @@ func (h *AuthHandler) clearLoginFailures(ip string) {
 }
 
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
-	ip := clientIP(r)
+	ip := h.clientIP(r)
 	if blocked, wait := h.loginBlocked(ip); blocked {
 		seconds := int(wait.Seconds())
 		if seconds < 1 {
@@ -151,6 +156,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.clearLoginFailures(ip)
+	mustChangePassword := h.mgr.IsUsingDefaultLogin()
 
 	token, err := newSessionToken()
 	if err != nil {
@@ -160,7 +166,11 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	expires := time.Now().Add(sessionTTL)
 	h.mu.Lock()
-	h.sessions[token] = sessionRecord{Username: req.Username, Expires: expires}
+	h.sessions[token] = sessionRecord{
+		Username:           req.Username,
+		Expires:            expires,
+		MustChangePassword: mustChangePassword,
+	}
 	h.mu.Unlock()
 
 	http.SetCookie(w, &http.Cookie{
@@ -168,15 +178,16 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   isSecureRequest(r),
+		Secure:   h.isSecureRequest(r),
 		SameSite: http.SameSiteLaxMode,
 		Expires:  expires,
 		MaxAge:   int(sessionTTL.Seconds()),
 	})
 
 	respondJSON(w, http.StatusOK, map[string]any{
-		"authenticated": true,
-		"username":      req.Username,
+		"authenticated":      true,
+		"username":           req.Username,
+		"mustChangePassword": mustChangePassword,
 	})
 }
 
@@ -191,7 +202,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   isSecureRequest(r),
+		Secure:   h.isSecureRequest(r),
 		SameSite: http.SameSiteLaxMode,
 		Expires:  time.Unix(0, 0),
 		MaxAge:   -1,
@@ -200,14 +211,15 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) Session(w http.ResponseWriter, r *http.Request) {
-	username, ok := h.usernameFromRequest(r)
+	rec, ok := h.sessionFromRequest(r)
 	if !ok {
 		respondJSON(w, http.StatusOK, map[string]any{"authenticated": false})
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]any{
-		"authenticated": true,
-		"username":      username,
+		"authenticated":      true,
+		"username":           rec.Username,
+		"mustChangePassword": rec.MustChangePassword,
 	})
 }
 
@@ -228,18 +240,67 @@ func (h *AuthHandler) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		if _, ok := h.usernameFromRequest(r); !ok {
+		rec, ok := h.sessionFromRequest(r)
+		if !ok {
 			respondError(w, http.StatusUnauthorized, "Authentication required")
 			return
+		}
+		if rec.MustChangePassword && !h.isPasswordChangeAllowedRoute(path, r.Method) {
+			respondJSON(w, http.StatusPreconditionRequired, map[string]string{
+				"error":   "password_change_required",
+				"message": "Change default credentials before using other API endpoints.",
+			})
+			return
+		}
+		if isUnsafeHTTPMethod(r.Method) && !h.isCSRFIgnoredRoute(path) {
+			if !requestOriginMatchesCSRF(r, h.trustedProxies) {
+				if h.csrfMode == "report" {
+					ip := h.clientIP(r)
+					log.Printf("CSRF report-only mismatch: method=%s path=%s client_ip=%s origin=%q referer=%q", r.Method, path, ip, r.Header.Get("Origin"), r.Header.Get("Referer"))
+				} else if h.csrfMode == "enforce" {
+					respondJSON(w, http.StatusForbidden, map[string]string{
+						"error":   "csrf_origin_mismatch",
+						"message": "Cross-origin request rejected.",
+					})
+					return
+				}
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
+func (h *AuthHandler) isPasswordChangeAllowedRoute(path, method string) bool {
+	if path == "/api/auth/logout" || path == "/api/auth/session" || path == "/api/health" || path == "/api/ready" {
+		return true
+	}
+	if path == "/api/settings" && (method == http.MethodPut || method == http.MethodGet) {
+		return true
+	}
+	return false
+}
+
+func (h *AuthHandler) isCSRFIgnoredRoute(path string) bool {
+	switch path {
+	case "/api/auth/login", "/api/auth/logout", "/api/auth/session", "/api/health", "/api/ready":
+		return true
+	default:
+		return false
+	}
+}
+
 func (h *AuthHandler) usernameFromRequest(r *http.Request) (string, bool) {
+	rec, ok := h.sessionFromRequest(r)
+	if !ok {
+		return "", false
+	}
+	return rec.Username, true
+}
+
+func (h *AuthHandler) sessionFromRequest(r *http.Request) (sessionRecord, bool) {
 	c, err := r.Cookie(sessionCookieName)
 	if err != nil || c == nil || strings.TrimSpace(c.Value) == "" {
-		return "", false
+		return sessionRecord{}, false
 	}
 	token := c.Value
 
@@ -247,15 +308,26 @@ func (h *AuthHandler) usernameFromRequest(r *http.Request) (string, bool) {
 	rec, ok := h.sessions[token]
 	h.mu.RUnlock()
 	if !ok {
-		return "", false
+		return sessionRecord{}, false
 	}
 	if time.Now().After(rec.Expires) {
 		h.mu.Lock()
 		delete(h.sessions, token)
 		h.mu.Unlock()
-		return "", false
+		return sessionRecord{}, false
 	}
-	return rec.Username, true
+
+	needsChange := h.mgr.IsUsingDefaultLogin()
+	if rec.MustChangePassword != needsChange {
+		rec.MustChangePassword = needsChange
+		h.mu.Lock()
+		if latest, exists := h.sessions[token]; exists {
+			latest.MustChangePassword = needsChange
+			h.sessions[token] = latest
+		}
+		h.mu.Unlock()
+	}
+	return rec, true
 }
 
 func newSessionToken() (string, error) {
@@ -265,4 +337,3 @@ func newSessionToken() (string, error) {
 	}
 	return hex.EncodeToString(b), nil
 }
-
