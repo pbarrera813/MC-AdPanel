@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"minecraft-admin/minecraft"
 )
@@ -407,5 +408,17 @@ func respondJSON(w http.ResponseWriter, status int, data interface{}) {
 
 // respondError writes a JSON error response
 func respondError(w http.ResponseWriter, status int, message string) {
+	trimmed := strings.TrimSpace(message)
+	if strings.HasPrefix(trimmed, "server_config_path_unsafe:") {
+		detail := strings.TrimSpace(strings.TrimPrefix(trimmed, "server_config_path_unsafe:"))
+		if detail == "" {
+			detail = "Server path is outside managed directories."
+		}
+		respondJSON(w, status, map[string]string{
+			"error":   "server_config_path_unsafe",
+			"message": detail,
+		})
+		return
+	}
 	respondJSON(w, status, map[string]string{"error": message})
 }
