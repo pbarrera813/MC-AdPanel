@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -174,7 +178,15 @@ func main() {
 	log.Println("=== Orexa Panel ===")
 	log.Printf("Servers directory: %s", filepath.Join(baseDir, "Servers"))
 	log.Println("Server running on http://localhost:4010")
-	log.Fatal(http.ListenAndServe(":4010", handler))
+	srv := &http.Server{
+		Addr:              ":4010",
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      10 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    1 << 20,
+	}
+	log.Fatal(srv.ListenAndServe())
 }
 
 // spaHandler serves static files from distDir, falling back to index.html for client-side routes
@@ -268,7 +280,90 @@ func runStartupChecks(baseDir, distDir string) error {
 		return err
 	}
 	log.Printf("Self-check ok: frontend assets detected (%s)", distIndex)
+	ensureLinuxHostnameResolvable()
 	return nil
+}
+
+func ensureLinuxHostnameResolvable() {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("ADPANEL_AUTO_FIX_HOSTS")), "false") {
+		return
+	}
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		log.Printf("Self-check warning: unable to read hostname for /etc/hosts check: %v", err)
+		return
+	}
+	hostname = strings.TrimSpace(hostname)
+	if hostname == "" || strings.EqualFold(hostname, "localhost") || net.ParseIP(hostname) != nil {
+		return
+	}
+	if _, err := net.LookupHost(hostname); err == nil {
+		return
+	}
+
+	const hostsPath = "/etc/hosts"
+	hostsContent, err := os.ReadFile(hostsPath)
+	if err != nil {
+		log.Printf("Self-check warning: hostname %q is unresolved and %s could not be read: %v", hostname, hostsPath, err)
+		return
+	}
+	if hostsFileContainsHostname(hostsContent, hostname) {
+		log.Printf("Self-check warning: hostname %q is unresolved even though it is present in %s", hostname, hostsPath)
+		return
+	}
+
+	file, err := os.OpenFile(hostsPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		log.Printf("Self-check warning: unable to append hostname %q to %s: %v", hostname, hostsPath, err)
+		return
+	}
+	defer file.Close()
+
+	prefix := ""
+	if len(hostsContent) > 0 && !bytes.HasSuffix(hostsContent, []byte("\n")) {
+		prefix = "\n"
+	}
+	if _, err := file.WriteString(fmt.Sprintf("%s127.0.0.1\t%s\n", prefix, hostname)); err != nil {
+		log.Printf("Self-check warning: failed writing hostname %q to %s: %v", hostname, hostsPath, err)
+		return
+	}
+
+	if _, err := net.LookupHost(hostname); err != nil {
+		log.Printf("Self-check warning: hostname %q was added to %s but still appears unresolved: %v", hostname, hostsPath, err)
+		return
+	}
+	log.Printf("Self-check ok: added hostname %q to %s to avoid local resolver warnings", hostname, hostsPath)
+}
+
+func hostsFileContainsHostname(content []byte, hostname string) bool {
+	needle := strings.TrimSpace(hostname)
+	if needle == "" {
+		return false
+	}
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if hash := strings.Index(trimmed, "#"); hash >= 0 {
+			trimmed = strings.TrimSpace(trimmed[:hash])
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) < 2 {
+			continue
+		}
+		for _, alias := range fields[1:] {
+			if strings.EqualFold(alias, needle) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func runReadinessChecks(baseDir, distDir string, mgr *minecraft.Manager) error {
