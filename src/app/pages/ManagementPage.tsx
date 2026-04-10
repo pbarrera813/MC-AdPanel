@@ -57,6 +57,25 @@ const setDateTimePart = (value: Date | null, part: 'hours' | 'minutes', nextValu
   return next;
 };
 
+const parseRamToMB = (value: string) => {
+  if (!value) return 0;
+  const trimmed = value.trim().toUpperCase();
+  const num = Number.parseFloat(trimmed.replace(/[^0-9.]/g, ''));
+  if (!Number.isFinite(num) || num <= 0) return 0;
+  if (trimmed.endsWith('G')) return num * 1024;
+  if (trimmed.endsWith('K')) return num / 1024;
+  return num;
+};
+
+const formatRamCapLabel = (ramMb: number) => {
+  if (!Number.isFinite(ramMb) || ramMb <= 0) return '0MB';
+  if (ramMb >= 1024) {
+    const gb = ramMb / 1024;
+    return `${Number.isInteger(gb) ? gb.toFixed(0) : gb.toFixed(1)}GB`;
+  }
+  return `${Math.round(ramMb)}MB`;
+};
+
 type DateTimePopoverProps = {
   value: Date | null;
   onChange: (value: Date | null) => void;
@@ -373,6 +392,9 @@ export const ManagementPage = () => {
 
   const isServerRunning = activeServer?.status === 'Running' || activeServer?.status === 'Booting';
   const isVelocityProxy = activeServer?.type === 'Velocity';
+  const allocatedRamMb = parseRamToMB(activeServer?.maxRam || '');
+  const usedRamMb = activeServer?.ramMb ?? ((activeServer?.ramBytes || 0) / 1024 / 1024);
+  const allocatedRamLabel = formatRamCapLabel(allocatedRamMb);
 
   const handleSettingsFieldFocus = () => {
     if (isServerRunning) {
@@ -593,7 +615,14 @@ export const ManagementPage = () => {
                 })()}
 
                 <MetricChart title="CPU Usage" value={activeServer.cpu} color="#E5B80B" unit="%" />
-                <MetricChart title="RAM Usage" value={activeServer.ram} color="#3b82f6" unit=" MB" />
+                <MetricChart
+                  title="RAM Usage"
+                  value={usedRamMb}
+                  color="#3b82f6"
+                  unit=" MB"
+                  secondaryLabel={allocatedRamLabel}
+                  valueFormatter={(value) => `${Math.max(0, value).toFixed(0)} MB`}
+                />
              </div>
 
              {/* Server Settings */}
@@ -1009,7 +1038,21 @@ const TabButton = ({ id, label, icon: Icon, active, onClick, disabled, disabledR
   </button>
 );
 
-const MetricChart = ({ title, value, color, unit = '%' }: { title: string, value: number, color: string, unit?: string }) => {
+const MetricChart = ({
+  title,
+  value,
+  color,
+  unit = '%',
+  secondaryLabel,
+  valueFormatter,
+}: {
+  title: string;
+  value: number;
+  color: string;
+  unit?: string;
+  secondaryLabel?: string;
+  valueFormatter?: (value: number) => string;
+}) => {
   const [data, setData] = useState<{v: number}[]>(Array(20).fill({v: 0}));
 
   useEffect(() => {
@@ -1019,11 +1062,17 @@ const MetricChart = ({ title, value, color, unit = '%' }: { title: string, value
     return () => clearInterval(interval);
   }, [value]);
 
+  const latestValue = Math.max(0, data[data.length - 1].v);
+  const displayValue = valueFormatter ? valueFormatter(latestValue) : `${Math.round(latestValue)}${unit}`;
+
   return (
     <div className="bg-[#202020] rounded-lg border border-[#333] p-4">
       <div className="flex justify-between items-center mb-2">
-        <h4 className="text-gray-400 text-xs uppercase font-bold tracking-wider">{title}</h4>
-        <span className="text-white font-mono font-bold">{Math.max(0, Math.round(data[data.length-1].v))}{unit}</span>
+        <div>
+          <h4 className="text-gray-400 text-xs uppercase font-bold tracking-wider">{title}</h4>
+          {secondaryLabel && <p className="text-[11px] text-gray-500 mt-0.5">{secondaryLabel}</p>}
+        </div>
+        <span className="text-white font-mono font-bold">{displayValue}</span>
       </div>
       <div className="h-24 w-full">
         <ResponsiveContainer width="100%" height="100%">

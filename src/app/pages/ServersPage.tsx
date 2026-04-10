@@ -747,7 +747,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
                   <div className="flex items-center gap-2 text-gray-400 text-xs mb-1">
                     <HardDrive size={14} /> RAM
                   </div>
-                  <div className="text-lg font-mono text-white">{server.status === 'Running' ? `${Math.round(server.ram)} MB` : '-'}</div>
+                  <div className="text-lg font-mono text-white">{server.status === 'Running' ? `${Math.round(server.ram)}%` : '-'}</div>
                 </div>
               </div>
 

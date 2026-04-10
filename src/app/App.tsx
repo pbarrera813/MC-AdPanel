@@ -40,7 +40,7 @@ function MainLayout() {
       case 'backups': return <BackupsPage />;
       case 'logs': return <LogsPage />;
       case 'cloning': return <CloningPage />;
-      case 'settings': return <SystemSettingsPage />;
+      case 'settings': return <SystemSettingsPage onViewChange={setCurrentView} />;
       default: return <ManagementPage />;
     }
   };

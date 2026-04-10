@@ -11,6 +11,9 @@ export interface Server {
   status: ServerStatus;
   cpu: number;
   ram: number;
+  cpuExact?: number;
+  ramBytes?: number;
+  ramMb?: number;
   tps: number;
   port: number;
   maxRam: string;
