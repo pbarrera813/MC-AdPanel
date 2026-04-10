@@ -197,6 +197,7 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
   const [editingFile, setEditingFile] = useState<{ path: string; content: string } | null>(null);
   const [editContent, setEditContent] = useState('');
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [uploadMaxBytes, setUploadMaxBytes] = useState(256 * 1024 * 1024);
   const [isNewFolderModalOpen, setIsNewFolderModalOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('New Folder');
   const [isUploading, setIsUploading] = useState(false);
@@ -229,6 +230,7 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
   const previousServerIdRef = useRef(server.id);
 
   const hasSelection = selectedNames.size > 0;
+  const uploadMaxMb = Math.max(1, Math.round(uploadMaxBytes / (1024 * 1024)));
   const isSwitchingServer = previousServerIdRef.current !== server.id;
   const getRenameSelectionRange = useCallback((name: string, type: FileEntry['type']) => {
     if (type !== 'file') return [0, name.length] as const;
@@ -271,6 +273,24 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
     setSelectedNames(new Set());
     setRecentUploadResults(new Map());
   }, [fetchFiles]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/settings')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        if (typeof data.maxUploadBytes === 'number' && data.maxUploadBytes > 0) {
+          setUploadMaxBytes(data.maxUploadBytes);
+        }
+      })
+      .catch(() => {
+        // Keep defaults when settings can't be fetched.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!isRenameModalOpen) return;
@@ -622,6 +642,10 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
             reject(new UploadConflictError(payload.name || item.file.name));
             return;
           }
+        }
+        if (xhr.status === 413) {
+          reject(new Error(`File exceeds maximum allowed size (${uploadMaxMb} MB).`));
+          return;
         }
         if (xhr.status >= 200 && xhr.status < 300) {
           if (payload?.status === 'skipped') {
@@ -1389,6 +1413,7 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
                   <Upload size={32} className="mb-2" />
                   <p>Drag & drop files or folders here</p>
                   <p className="text-xs text-gray-600 mt-2">Click to choose files, or use the folder button below</p>
+                  <p className="text-xs text-gray-600 mt-1">Maximum file size: 256MB</p>
                   <button
                     type="button"
                     onClick={(e) => {
@@ -1432,7 +1457,6 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
                             <Checkbox
                               checked={applyConflictActionToAll}
                               onCheckedChange={(checked) => setApplyConflictActionToAll(checked === true)}
-                              className="size-4 !border-[#4a4a4a] !bg-[#111111] text-transparent data-[state=checked]:!bg-[#111111] data-[state=checked]:!text-[#E5B80B] data-[state=checked]:!border-[#E5B80B] focus-visible:ring-[#E5B80B]/35"
                             />
                             Apply the same instruction to all files?
                           </label>

@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { useServer } from '../context/ServerContext';
-import { Copy, Check, X } from 'lucide-react';
+import { Copy, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import clsx from 'clsx';
 import { useEscapeKey } from '../hooks/useEscapeKey';
+import { Checkbox } from '../components/ui/checkbox';
 
 const findNextAvailablePort = (startPort: number, occupiedPorts: Set<number>) => {
   let port = Math.max(1024, startPort);
@@ -217,15 +218,24 @@ export const CloningPage = () => {
 
                 <div className="space-y-2">
                   <label className="flex items-center gap-2 text-gray-300 cursor-pointer select-none">
-                    <input type="checkbox" checked={options.plugins} onChange={e => setOptions({...options, plugins: e.target.checked})} className="accent-[#E5B80B]" />
+                    <Checkbox
+                      checked={options.plugins}
+                      onCheckedChange={(checked) => setOptions({ ...options, plugins: checked === true })}
+                    />
                     Copy Plugins & Mods
                   </label>
                   <label className="flex items-center gap-2 text-gray-300 cursor-pointer select-none">
-                    <input type="checkbox" checked={options.worlds} onChange={e => setOptions({...options, worlds: e.target.checked})} className="accent-[#E5B80B]" />
+                    <Checkbox
+                      checked={options.worlds}
+                      onCheckedChange={(checked) => setOptions({ ...options, worlds: checked === true })}
+                    />
                     Copy Worlds (This may take time)
                   </label>
                   <label className="flex items-center gap-2 text-gray-300 cursor-pointer select-none">
-                    <input type="checkbox" checked={options.config} onChange={e => setOptions({...options, config: e.target.checked})} className="accent-[#E5B80B]" />
+                    <Checkbox
+                      checked={options.config}
+                      onCheckedChange={(checked) => setOptions({ ...options, config: checked === true })}
+                    />
                     Copy Configuration Files
                   </label>
                 </div>

@@ -75,6 +75,7 @@ export const PluginsPage = () => {
   const [editingSources, setEditingSources] = useState<Set<string>>(new Set());
   const [uploadConflict, setUploadConflict] = useState<UploadConflictState | null>(null);
   const [duplicateInstalledModalOpen, setDuplicateInstalledModalOpen] = useState(false);
+  const [uploadMaxBytes, setUploadMaxBytes] = useState(256 * 1024 * 1024);
   const uploadConflictResolverRef = useRef<((action: Exclude<UploadConflictAction, 'prompt'>) => void) | null>(null);
 
   const isServerOff = activeServer?.status === 'Stopped' || activeServer?.status === 'Crashed' || activeServer?.status === 'Error';
@@ -83,6 +84,7 @@ export const PluginsPage = () => {
   const itemLabel = isModded ? 'mod' : 'plugin';
   const itemLabelPlural = isModded ? 'mods' : 'plugins';
   const itemLabelCap = isModded ? 'Mod' : 'Plugin';
+  const uploadMaxMb = Math.max(1, Math.round(uploadMaxBytes / (1024 * 1024)));
 
   const fetchPlugins = useCallback(async (serverId?: string | null) => {
     const id = serverId ?? activeServerId;
@@ -112,6 +114,24 @@ export const PluginsPage = () => {
   useEffect(() => {
     fetchPlugins(activeServerId);
   }, [fetchPlugins, activeServerId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/settings')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        if (typeof data.maxUploadBytes === 'number' && data.maxUploadBytes > 0) {
+          setUploadMaxBytes(data.maxUploadBytes);
+        }
+      })
+      .catch(() => {
+        // Keep defaults when settings cannot be loaded.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     setUpdatesChecked(false);
@@ -264,6 +284,9 @@ export const PluginsPage = () => {
       if (payload?.error === 'already_installed') {
         throw new DuplicateInstalledError();
       }
+    }
+    if (res.status === 413) {
+      throw new Error(`File exceeds maximum allowed size (${uploadMaxMb} MB).`);
     }
 
     const data = await res.json().catch(() => ({} as { error?: string; status?: string }));
@@ -959,6 +982,7 @@ export const PluginsPage = () => {
                   <Upload size={32} className="mb-2" />
                   <p>Drag & drop .jar file here</p>
                   <p className="text-xs text-gray-600 mt-2">or click to browse</p>
+                  <p className="text-xs text-gray-600 mt-1">Maximum file size: 256MB</p>
                 </div>
               )}
               <div className="flex justify-end gap-3">
