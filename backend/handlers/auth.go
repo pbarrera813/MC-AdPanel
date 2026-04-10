@@ -277,6 +277,9 @@ func (h *AuthHandler) isPasswordChangeAllowedRoute(path, method string) bool {
 	if path == "/api/settings" && (method == http.MethodPut || method == http.MethodGet) {
 		return true
 	}
+	if path == "/api/system/usage" && method == http.MethodGet {
+		return true
+	}
 	return false
 }
 

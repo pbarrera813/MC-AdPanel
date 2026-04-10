@@ -61,6 +61,7 @@ func main() {
 	logHandler := handlers.NewLogHandler(mgr)
 	versionHandler := handlers.NewVersionHandler(mgr)
 	settingsHandler := handlers.NewSettingsHandler(mgr)
+	systemUsageHandler := handlers.NewSystemUsageHandler(mgr)
 	authHandler := handlers.NewAuthHandler(mgr, baseDir)
 
 	// Set up router using Go 1.22+ ServeMux
@@ -115,6 +116,7 @@ func main() {
 	// System settings
 	mux.HandleFunc("GET /api/settings", settingsHandler.Get)
 	mux.HandleFunc("PUT /api/settings", settingsHandler.Update)
+	mux.HandleFunc("GET /api/system/usage", systemUsageHandler.Get)
 
 	// Authentication
 	mux.HandleFunc("POST /api/auth/login", authHandler.Login)

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"os"
 	"os/exec"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/mem"
 	"github.com/shirou/gopsutil/v4/process"
 )
 
@@ -67,6 +69,9 @@ type ServerInfo struct {
 	InstallError       string  `json:"installError,omitempty"`
 	FabricTpsAvailable bool    `json:"fabricTpsAvailable,omitempty"`
 	TpsStale           bool    `json:"tpsStale,omitempty"`
+	CPUExact           float64 `json:"cpuExact,omitempty"`
+	RAMBytes           uint64  `json:"ramBytes,omitempty"`
+	RAMMB              float64 `json:"ramMb,omitempty"`
 }
 
 // PluginInfo represents a plugin jar file
@@ -138,6 +143,7 @@ type runningServer struct {
 	status             string
 	cpu                float64
 	ram                float64
+	ramBytes           uint64
 	tps                float64
 	pid                int
 	logBuffer          []ConsoleLogEntry
@@ -285,7 +291,42 @@ type Manager struct {
 	backupsRootReal    string
 	quarantinedServers map[string]string
 	stopScheduler      chan struct{}
+	stopUsageSampler   chan struct{}
+	hostLogicalCPUs    int
+	hostTotalRAMBytes  uint64
+	usageMu            sync.RWMutex
+	systemUsage        SystemUsageSnapshot
 	mu                 sync.RWMutex
+}
+
+type UsageHostInfo struct {
+	LogicalCPUCount int    `json:"logicalCpuCount"`
+	TotalRAMBytes   uint64 `json:"totalRamBytes"`
+}
+
+type UsageProcessSnapshot struct {
+	ID         string  `json:"id,omitempty"`
+	Name       string  `json:"name"`
+	Type       string  `json:"type,omitempty"`
+	Status     string  `json:"status,omitempty"`
+	PID        int     `json:"pid"`
+	CPUPercent float64 `json:"cpuPercent"`
+	RAMBytes   uint64  `json:"ramBytes"`
+	RAMPercent float64 `json:"ramPercent"`
+}
+
+type UsageTotalsSnapshot struct {
+	CPUPercent float64 `json:"cpuPercent"`
+	RAMBytes   uint64  `json:"ramBytes"`
+	RAMPercent float64 `json:"ramPercent"`
+}
+
+type SystemUsageSnapshot struct {
+	Timestamp string                 `json:"timestamp"`
+	Host      UsageHostInfo          `json:"host"`
+	Panel     UsageProcessSnapshot   `json:"panel"`
+	Servers   []UsageProcessSnapshot `json:"servers"`
+	Total     UsageTotalsSnapshot    `json:"total"`
 }
 
 var hiddenServerRootArtifacts = map[string]struct{}{
@@ -317,6 +358,232 @@ func formatFileSize(bytes int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+func bytesToMB(value uint64) float64 {
+	return float64(value) / 1024 / 1024
+}
+
+func clampPercent(value float64) float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return 0
+	}
+	if value > 100 {
+		return 100
+	}
+	return value
+}
+
+func (m *Manager) hostCPUSharePercent(rawPercent float64) float64 {
+	if math.IsNaN(rawPercent) || math.IsInf(rawPercent, 0) || rawPercent < 0 {
+		return 0
+	}
+	divisor := float64(m.hostLogicalCPUs)
+	if divisor <= 0 {
+		divisor = 1
+	}
+	return clampPercent(rawPercent / divisor)
+}
+
+func (m *Manager) hostRAMSharePercent(ramBytes uint64) float64 {
+	if m.hostTotalRAMBytes == 0 {
+		return 0
+	}
+	return clampPercent((float64(ramBytes) / float64(m.hostTotalRAMBytes)) * 100)
+}
+
+func (m *Manager) loadHostUsageMetadata() {
+	m.hostLogicalCPUs = 1
+	if count, err := cpu.Counts(true); err == nil && count > 0 {
+		m.hostLogicalCPUs = count
+	}
+	if vm, err := mem.VirtualMemory(); err == nil && vm != nil {
+		m.hostTotalRAMBytes = vm.Total
+	}
+}
+
+type usageServerTarget struct {
+	ID     string
+	Name   string
+	Type   string
+	Status string
+	PID    int
+	RS     *runningServer
+}
+
+func (m *Manager) runUsageSampler() {
+	const sampleInterval = 2 * time.Second
+	const summaryInterval = 60 * time.Second
+
+	log.Printf("Usage sampler started (interval=%s, logical_cpus=%d, total_ram_bytes=%d)", sampleInterval, m.hostLogicalCPUs, m.hostTotalRAMBytes)
+
+	panelPID := os.Getpid()
+	knownProcesses := make(map[int]*process.Process)
+	ticker := time.NewTicker(sampleInterval)
+	defer ticker.Stop()
+	lastSummary := time.Time{}
+
+	sampleProcess := func(pid int) (float64, uint64, bool) {
+		if pid <= 0 {
+			return 0, 0, false
+		}
+		proc := knownProcesses[pid]
+		if proc == nil {
+			nextProc, err := process.NewProcess(int32(pid))
+			if err != nil {
+				delete(knownProcesses, pid)
+				return 0, 0, false
+			}
+			proc = nextProc
+			knownProcesses[pid] = proc
+		}
+
+		rawCPU, err := proc.Percent(0)
+		if err != nil {
+			delete(knownProcesses, pid)
+			return 0, 0, false
+		}
+		memInfo, err := proc.MemoryInfo()
+		if err != nil || memInfo == nil {
+			delete(knownProcesses, pid)
+			return 0, 0, false
+		}
+		return m.hostCPUSharePercent(rawCPU), memInfo.RSS, true
+	}
+
+	sampleOnce := func() {
+		targets := make([]usageServerTarget, 0, len(m.running))
+
+		m.mu.RLock()
+		for id, rs := range m.running {
+			cfg, ok := m.configs[id]
+			if !ok || cfg == nil || rs == nil {
+				continue
+			}
+			rs.mu.RLock()
+			target := usageServerTarget{
+				ID:     id,
+				Name:   cfg.Name,
+				Type:   cfg.Type,
+				Status: rs.status,
+				PID:    rs.pid,
+				RS:     rs,
+			}
+			rs.mu.RUnlock()
+			targets = append(targets, target)
+		}
+		m.mu.RUnlock()
+
+		panelCPU := 0.0
+		panelRAM := uint64(0)
+		if cpuPercent, ramBytes, ok := sampleProcess(panelPID); ok {
+			panelCPU = cpuPercent
+			panelRAM = ramBytes
+		}
+
+		serverSnapshots := make([]UsageProcessSnapshot, 0, len(targets))
+		totalCPU := panelCPU
+		totalRAM := panelRAM
+
+		for _, target := range targets {
+			serverCPU := 0.0
+			serverRAM := uint64(0)
+			if cpuPercent, ramBytes, ok := sampleProcess(target.PID); ok {
+				serverCPU = cpuPercent
+				serverRAM = ramBytes
+			}
+			target.RS.mu.Lock()
+			target.RS.cpu = serverCPU
+			target.RS.ram = m.hostRAMSharePercent(serverRAM)
+			target.RS.ramBytes = serverRAM
+			target.RS.mu.Unlock()
+
+			if target.PID <= 0 {
+				continue
+			}
+
+			snapshot := UsageProcessSnapshot{
+				ID:         target.ID,
+				Name:       target.Name,
+				Type:       target.Type,
+				Status:     target.Status,
+				PID:        target.PID,
+				CPUPercent: serverCPU,
+				RAMBytes:   serverRAM,
+				RAMPercent: m.hostRAMSharePercent(serverRAM),
+			}
+			serverSnapshots = append(serverSnapshots, snapshot)
+			totalCPU += snapshot.CPUPercent
+			totalRAM += snapshot.RAMBytes
+		}
+
+		snapshot := SystemUsageSnapshot{
+			Timestamp: time.Now().UTC().Format(time.RFC3339),
+			Host: UsageHostInfo{
+				LogicalCPUCount: m.hostLogicalCPUs,
+				TotalRAMBytes:   m.hostTotalRAMBytes,
+			},
+			Panel: UsageProcessSnapshot{
+				Name:       "Orexa Panel",
+				Type:       "panel",
+				Status:     "Running",
+				PID:        panelPID,
+				CPUPercent: panelCPU,
+				RAMBytes:   panelRAM,
+				RAMPercent: m.hostRAMSharePercent(panelRAM),
+			},
+			Servers: serverSnapshots,
+			Total: UsageTotalsSnapshot{
+				CPUPercent: clampPercent(totalCPU),
+				RAMBytes:   totalRAM,
+				RAMPercent: m.hostRAMSharePercent(totalRAM),
+			},
+		}
+
+		m.usageMu.Lock()
+		m.systemUsage = snapshot
+		m.usageMu.Unlock()
+
+		now := time.Now()
+		if lastSummary.IsZero() || now.Sub(lastSummary) >= summaryInterval {
+			lastSummary = now
+			log.Printf(
+				"Usage summary: panel_cpu=%.2f%% panel_ram_mb=%.2f total_cpu=%.2f%% total_ram_mb=%.2f running_servers=%d",
+				snapshot.Panel.CPUPercent,
+				bytesToMB(snapshot.Panel.RAMBytes),
+				snapshot.Total.CPUPercent,
+				bytesToMB(snapshot.Total.RAMBytes),
+				len(snapshot.Servers),
+			)
+		}
+	}
+
+	sampleOnce()
+
+	for {
+		select {
+		case <-m.stopUsageSampler:
+			return
+		case <-ticker.C:
+			sampleOnce()
+		}
+	}
+}
+
+func (m *Manager) GetSystemUsage() SystemUsageSnapshot {
+	m.usageMu.RLock()
+	defer m.usageMu.RUnlock()
+
+	servers := make([]UsageProcessSnapshot, len(m.systemUsage.Servers))
+	copy(servers, m.systemUsage.Servers)
+
+	return SystemUsageSnapshot{
+		Timestamp: m.systemUsage.Timestamp,
+		Host:      m.systemUsage.Host,
+		Panel:     m.systemUsage.Panel,
+		Servers:   servers,
+		Total:     m.systemUsage.Total,
+	}
 }
 
 func isModdedType(serverType string) bool {
@@ -694,7 +961,9 @@ func NewManager(baseDir string) (*Manager, error) {
 		backupsRootReal:    backupsRootReal,
 		quarantinedServers: make(map[string]string),
 		stopScheduler:      make(chan struct{}),
+		stopUsageSampler:   make(chan struct{}),
 	}
+	mgr.loadHostUsageMetadata()
 
 	if err := mgr.load(); err != nil {
 		return nil, err
@@ -736,6 +1005,7 @@ func NewManager(baseDir string) (*Manager, error) {
 
 	// Start the scheduled backup checker
 	go mgr.runBackupScheduler()
+	go mgr.runUsageSampler()
 
 	return mgr, nil
 }
@@ -1175,6 +1445,9 @@ func (m *Manager) StartServer(id string) error {
 	rs.stdin = stdinPipe
 	rs.status = "Booting"
 	rs.pid = cmd.Process.Pid
+	rs.cpu = 0
+	rs.ram = 0
+	rs.ramBytes = 0
 	rs.logBuffer = make([]ConsoleLogEntry, 0)
 	rs.nextLogSeq = 1
 	rs.pendingListRefresh = false
@@ -1207,6 +1480,7 @@ func (m *Manager) StartServer(id string) error {
 		}
 		rs.cpu = 0
 		rs.ram = 0
+		rs.ramBytes = 0
 		rs.tps = 0
 		rs.pid = 0
 		rs.players = make(map[string]*onlinePlayer)
@@ -1561,38 +1835,8 @@ func (m *Manager) collectMetrics(id string, rs *runningServer) {
 			return
 		case <-ticker.C:
 			rs.mu.RLock()
-			pid := rs.pid
 			status := rs.status
 			rs.mu.RUnlock()
-
-			if pid == 0 {
-				continue
-			}
-
-			// System-wide CPU usage
-			cpuPercents, cpuErr := cpu.Percent(0, false)
-			var cpuPercent float64
-			if cpuErr == nil && len(cpuPercents) > 0 {
-				cpuPercent = cpuPercents[0]
-			}
-
-			// Per-process RAM usage
-			proc, err := process.NewProcess(int32(pid))
-			if err != nil {
-				continue
-			}
-
-			memInfo, err := proc.MemoryInfo()
-			if err != nil {
-				continue
-			}
-
-			rs.mu.Lock()
-			rs.cpu = cpuPercent
-			if memInfo != nil {
-				rs.ram = float64(memInfo.RSS) / 1024 / 1024
-			}
-			rs.mu.Unlock()
 
 			polls := m.currentPollIntervals()
 			now := time.Now()
@@ -1760,6 +2004,7 @@ func (m *Manager) StopServer(id string) error {
 	rs.status = "Stopped"
 	rs.cpu = 0
 	rs.ram = 0
+	rs.ramBytes = 0
 	rs.pid = 0
 	rs.players = make(map[string]*onlinePlayer)
 	clearScheduledActionsLocked(rs)
@@ -1974,6 +2219,9 @@ func (m *Manager) serverInfo(id string) *ServerInfo {
 		info.Status = rs.status
 		info.CPU = rs.cpu
 		info.RAM = rs.ram
+		info.CPUExact = rs.cpu
+		info.RAMBytes = rs.ramBytes
+		info.RAMMB = bytesToMB(rs.ramBytes)
 		info.TPS = rs.tps
 		info.InstallError = rs.installError
 		lastTpsUpdate := rs.lastTpsUpdate
@@ -2321,6 +2569,7 @@ func (m *Manager) migrateBackupDir(oldDir, newDir string) error {
 func (m *Manager) StopAll() {
 	// Stop the backup scheduler
 	close(m.stopScheduler)
+	close(m.stopUsageSampler)
 
 	m.mu.RLock()
 	ids := make([]string, 0)
