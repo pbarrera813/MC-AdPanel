@@ -274,6 +274,11 @@ Notes:
 | `ADPANEL_DIR` | `/AdPanel` | Base directory for panel data |
 | `ADPANEL_USER_AGENT` | unset | Override User-Agent for upstream downloads |
 | `ADPANEL_ALLOWED_ORIGINS` | unset | Comma-separated list of origins allowed by the CORS middleware |
+| `ADPANEL_TRUSTED_PROXIES` | unset | Comma-separated CIDRs/IPs that are trusted for forwarded headers |
+| `ADPANEL_CSRF_MODE` | `enforce` | CSRF policy for authenticated API writes (`enforce`, `report`, `off`) |
+| `ADPANEL_MAX_UPLOAD_BYTES` | `268435456` | Maximum upload body size in bytes for file and extension uploads |
+| `ADPANEL_PLUGIN_UPDATE_ALLOWED_HOSTS` | unset | Extra trusted hosts/domains for plugin/mod update downloads |
+| `ADPANEL_MAX_PLUGIN_UPDATE_BYTES` | `268435456` | Maximum plugin/mod update download size in bytes |
 | `ADPANEL_DEBUG_PLUGIN_UPDATES` | `0` | Enable verbose plugin/mod update diagnostics when set to `1` |
 
 Most day-to-day configuration is managed from the System Settings page and stored in `/AdPanel/data/settings.json`.
@@ -427,4 +432,3 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
