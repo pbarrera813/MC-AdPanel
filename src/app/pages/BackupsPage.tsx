@@ -6,6 +6,7 @@ import { format } from 'date-fns';
 import { toast } from 'sonner';
 import clsx from 'clsx';
 import { useEscapeKey } from '../hooks/useEscapeKey';
+import { useStagedDeleteUndo } from '../hooks/useStagedDeleteUndo';
 
 export const BackupsPage = () => {
   const { activeServer } = useServer();
@@ -21,6 +22,8 @@ export const BackupsPage = () => {
   const [nextBackup, setNextBackup] = useState<string | null>(null);
   const [selectedBackups, setSelectedBackups] = useState<Set<string>>(new Set());
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
+  const [pendingDeletedBackups, setPendingDeletedBackups] = useState<Set<string>>(new Set());
+  const { stageDelete, undoOverlay } = useStagedDeleteUndo();
 
   const fetchBackups = useCallback(async () => {
     if (!activeServer) return;
@@ -58,20 +61,44 @@ export const BackupsPage = () => {
     }
   };
 
-  const handleDelete = async (name: string) => {
+  const handleDelete = (name: string) => {
     if (!activeServer) return;
-    try {
-      const res = await fetch(`/api/servers/${activeServer.id}/backups/${encodeURIComponent(name)}`, {
-        method: 'DELETE',
-      });
-      if (!res.ok) throw new Error('Failed to delete backup');
-      toast.success('Backup deleted');
-      setDeleteTarget(null);
-      setSelectedBackups(new Set());
-      fetchBackups();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to delete');
-    }
+    setDeleteTarget(null);
+    setSelectedBackups((prev) => {
+      const next = new Set(prev);
+      next.delete(name);
+      return next;
+    });
+    setPendingDeletedBackups((prev) => {
+      const next = new Set(prev);
+      next.add(name);
+      return next;
+    });
+
+    stageDelete({
+      label: `Backup "${name}"`,
+      successMessage: 'Backup deleted',
+      errorMessage: 'Failed to delete backup',
+      onUndo: () => {
+        setPendingDeletedBackups((prev) => {
+          const next = new Set(prev);
+          next.delete(name);
+          return next;
+        });
+      },
+      onCommit: async () => {
+        const res = await fetch(`/api/servers/${activeServer.id}/backups/${encodeURIComponent(name)}`, {
+          method: 'DELETE',
+        });
+        if (!res.ok) throw new Error('Failed to delete backup');
+        setPendingDeletedBackups((prev) => {
+          const next = new Set(prev);
+          next.delete(name);
+          return next;
+        });
+        await fetchBackups();
+      },
+    });
   };
 
   const handleRestore = async (name: string) => {
@@ -116,6 +143,7 @@ export const BackupsPage = () => {
 
   useEffect(() => {
     setSelectedBackups(new Set());
+    setPendingDeletedBackups(new Set());
   }, [activeServer?.id]);
 
   useEscapeKey(!!deleteTarget, () => setDeleteTarget(null));
@@ -156,21 +184,44 @@ export const BackupsPage = () => {
     });
   };
 
-  const handleBatchDelete = async () => {
+  const handleBatchDelete = () => {
     if (!activeServer || selectedBackups.size === 0) return;
-    try {
-      for (const name of selectedBackups) {
-        const res = await fetch(`/api/servers/${activeServer.id}/backups/${encodeURIComponent(name)}`, { method: 'DELETE' });
-        if (!res.ok) throw new Error(`Failed to delete ${name}`);
-      }
-      toast.success(`${selectedBackups.size} backup${selectedBackups.size > 1 ? 's' : ''} deleted`);
-      setBatchDeleteConfirm(false);
-      setSelectedBackups(new Set());
-      fetchBackups();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to delete backups');
-    }
+    const names = Array.from(selectedBackups);
+    setBatchDeleteConfirm(false);
+    setSelectedBackups(new Set());
+    setPendingDeletedBackups((prev) => {
+      const next = new Set(prev);
+      names.forEach((name) => next.add(name));
+      return next;
+    });
+
+    stageDelete({
+      label: `${names.length} backup${names.length > 1 ? 's' : ''}`,
+      successMessage: `${names.length} backup${names.length > 1 ? 's' : ''} deleted`,
+      errorMessage: 'Failed to delete backups',
+      onUndo: () => {
+        setPendingDeletedBackups((prev) => {
+          const next = new Set(prev);
+          names.forEach((name) => next.delete(name));
+          return next;
+        });
+      },
+      onCommit: async () => {
+        for (const name of names) {
+          const res = await fetch(`/api/servers/${activeServer.id}/backups/${encodeURIComponent(name)}`, { method: 'DELETE' });
+          if (!res.ok) throw new Error(`Failed to delete ${name}`);
+        }
+        setPendingDeletedBackups((prev) => {
+          const next = new Set(prev);
+          names.forEach((name) => next.delete(name));
+          return next;
+        });
+        await fetchBackups();
+      },
+    });
   };
+
+  const visibleBackups = backups.filter((backup) => !pendingDeletedBackups.has(backup.name));
 
   if (!activeServer) {
     return <div className="flex items-center justify-center h-full text-gray-500">No server selected</div>;
@@ -226,7 +277,7 @@ export const BackupsPage = () => {
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4">
-          {backups.map((backup) => (
+          {visibleBackups.map((backup) => (
             <motion.div
               key={backup.name}
               initial={{ opacity: 0, y: 10 }}
@@ -301,7 +352,7 @@ export const BackupsPage = () => {
               </div>
             </motion.div>
           ))}
-          {backups.length === 0 && (
+          {visibleBackups.length === 0 && (
             <div className="p-12 text-center border-2 border-dashed border-[#3a3a3a] rounded-lg text-gray-500">
               <Archive size={48} className="mx-auto mb-4 opacity-20" />
               <p>No backups found.</p>
@@ -324,7 +375,7 @@ export const BackupsPage = () => {
                 <AlertTriangle size={24} />
                 <h3 className="text-xl font-bold">Delete Backup?</h3>
               </div>
-              <p className="text-gray-300 mb-6">Are you sure you want to delete <span className="font-mono text-white">{deleteTarget}</span>? This action cannot be undone.</p>
+              <p className="text-gray-300 mb-6">Are you sure you want to delete the chosen file?</p>
               <div className="flex justify-end gap-3">
                 <button onClick={() => setDeleteTarget(null)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
                 <button onClick={() => handleDelete(deleteTarget)} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Delete</button>
@@ -392,7 +443,7 @@ export const BackupsPage = () => {
                 <h3 className="text-xl font-bold">Delete {selectedBackups.size} Backup{selectedBackups.size > 1 ? 's' : ''}?</h3>
               </div>
               <p className="text-gray-300 mb-6">
-                Are you sure you want to delete {selectedBackups.size} selected backup{selectedBackups.size > 1 ? 's' : ''}? This action cannot be undone.
+                Are you sure you want to delete the chosen files?
               </p>
               <div className="flex justify-end gap-3">
                 <button onClick={() => setBatchDeleteConfirm(false)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
@@ -402,6 +453,7 @@ export const BackupsPage = () => {
           </div>
         )}
       </AnimatePresence>
+      {undoOverlay}
 
       {/* Schedule Backups Popup */}
       <AnimatePresence>
