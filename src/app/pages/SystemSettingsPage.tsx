@@ -44,9 +44,24 @@ type UsageHistoryPoint = {
   ram: number;
 };
 
+type SettingsSnapshot = {
+  loginUser: string;
+  loginPassword: string;
+  userAgent: string;
+  defaultMinRam: string;
+  defaultMaxRam: string;
+  defaultFlags: string;
+  statusPollInterval: string;
+  tpsPollInterval: string;
+  playerSyncInterval: string;
+  pingPollInterval: string;
+};
+
 type SystemSettingsPageProps = {
   onViewChange?: (view: View) => void;
 };
+
+const DETAILS_STORAGE_KEY = 'orexa.systemSettings.detailsOpen';
 
 const emptyUsage: SystemUsage = {
   timestamp: '',
@@ -128,6 +143,50 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
   const [usageHistory, setUsageHistory] = useState<UsageHistoryPoint[]>(
     Array.from({ length: 25 }, () => ({ cpu: 0, ram: 0 }))
   );
+  const [savedSnapshot, setSavedSnapshot] = useState<SettingsSnapshot | null>(null);
+
+  const currentSnapshot = useMemo<SettingsSnapshot>(
+    () => ({
+      loginUser,
+      loginPassword,
+      userAgent,
+      defaultMinRam,
+      defaultMaxRam,
+      defaultFlags,
+      statusPollInterval,
+      tpsPollInterval,
+      playerSyncInterval,
+      pingPollInterval,
+    }),
+    [
+      defaultFlags,
+      defaultMaxRam,
+      defaultMinRam,
+      loginPassword,
+      loginUser,
+      pingPollInterval,
+      playerSyncInterval,
+      statusPollInterval,
+      tpsPollInterval,
+      userAgent,
+    ]
+  );
+
+  const hasUnsavedChanges = useMemo(() => {
+    if (!savedSnapshot) return false;
+    return (
+      currentSnapshot.loginUser !== savedSnapshot.loginUser ||
+      currentSnapshot.loginPassword !== savedSnapshot.loginPassword ||
+      currentSnapshot.userAgent !== savedSnapshot.userAgent ||
+      currentSnapshot.defaultMinRam !== savedSnapshot.defaultMinRam ||
+      currentSnapshot.defaultMaxRam !== savedSnapshot.defaultMaxRam ||
+      currentSnapshot.defaultFlags !== savedSnapshot.defaultFlags ||
+      currentSnapshot.statusPollInterval !== savedSnapshot.statusPollInterval ||
+      currentSnapshot.tpsPollInterval !== savedSnapshot.tpsPollInterval ||
+      currentSnapshot.playerSyncInterval !== savedSnapshot.playerSyncInterval ||
+      currentSnapshot.pingPollInterval !== savedSnapshot.pingPollInterval
+    );
+  }, [currentSnapshot, savedSnapshot]);
 
   const fetchUsage = useCallback(async () => {
     try {
@@ -167,6 +226,18 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
           setTpsPollInterval(String(data.tpsPollInterval || 30));
           setPlayerSyncInterval(String(data.playerSyncInterval || 15));
           setPingPollInterval(String(data.pingPollInterval || 20));
+          setSavedSnapshot({
+            loginUser: data.loginUser || 'mcpanel',
+            loginPassword: '',
+            userAgent: data.userAgent || '',
+            defaultMinRam: data.defaultMinRam || '0.5',
+            defaultMaxRam: data.defaultMaxRam || '1',
+            defaultFlags: data.defaultFlags || 'none',
+            statusPollInterval: String(data.statusPollInterval || 3),
+            tpsPollInterval: String(data.tpsPollInterval || 30),
+            playerSyncInterval: String(data.playerSyncInterval || 15),
+            pingPollInterval: String(data.pingPollInterval || 20),
+          });
         }
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Failed to load settings');
@@ -198,6 +269,16 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
       clearInterval(interval);
     };
   }, [fetchUsage]);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(DETAILS_STORAGE_KEY);
+      if (!raw) return;
+      setDetailsOpen(raw === '1');
+    } catch {
+      // ignore persistence errors
+    }
+  }, []);
 
   const cpuSeries = useMemo(() => usageHistory.map(p => ({ v: p.cpu })), [usageHistory]);
   const ramSeries = useMemo(() => usageHistory.map(p => ({ v: p.ram })), [usageHistory]);
@@ -287,6 +368,18 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
         throw new Error(data.error || 'Failed to save settings');
       }
       setLoginPassword('');
+      setSavedSnapshot({
+        loginUser: trimmedLoginUser,
+        loginPassword: '',
+        userAgent,
+        defaultMinRam,
+        defaultMaxRam,
+        defaultFlags,
+        statusPollInterval: String(pollInterval),
+        tpsPollInterval: String(parsedTpsPoll),
+        playerSyncInterval: String(parsedPlayerSync),
+        pingPollInterval: String(parsedPingPoll),
+      });
       toast.success('Applied changes.');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save settings');
@@ -473,7 +566,17 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
             <h3 className="text-sm text-gray-300 font-semibold uppercase tracking-wider">Overall Usage</h3>
             <button
               type="button"
-              onClick={() => setDetailsOpen(prev => !prev)}
+              onClick={() =>
+                setDetailsOpen((prev) => {
+                  const next = !prev;
+                  try {
+                    window.localStorage.setItem(DETAILS_STORAGE_KEY, next ? '1' : '0');
+                  } catch {
+                    // ignore persistence errors
+                  }
+                  return next;
+                })
+              }
               className="px-3 py-1.5 text-xs bg-[#252524] border border-[#3a3a3a] rounded text-gray-200 hover:border-[#E5B80B] hover:text-white transition-colors inline-flex items-center gap-2"
             >
               Detailed View
@@ -586,6 +689,22 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
           )}
         </div>
       </div>
+
+      {hasUnsavedChanges && !loading && (
+        <div className="fixed bottom-4 right-4 z-[85] rounded-md border border-[#E5B80B] bg-[#E5B80B]/95 px-4 py-3 text-black shadow-2xl min-w-[320px]">
+          <div className="flex items-center justify-between gap-4">
+            <p className="text-sm font-semibold">Careful! You have unsaved changes.</p>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving}
+              className="rounded border border-black/30 bg-black px-3 py-1.5 text-xs font-bold text-[#E5B80B] hover:bg-[#111] disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {saving ? 'Saving...' : 'Save'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
