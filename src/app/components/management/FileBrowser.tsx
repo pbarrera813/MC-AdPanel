@@ -6,6 +6,7 @@ import clsx from 'clsx';
 import { toast } from 'sonner';
 import { useEscapeKey } from '../../hooks/useEscapeKey';
 import { Checkbox } from '../ui/checkbox';
+import { useStagedDeleteUndo } from '../../hooks/useStagedDeleteUndo';
 
 interface FileBrowserProps {
   server: Server;
@@ -218,6 +219,8 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
   const [newName, setNewName] = useState('');
   const [renameExtensionWarningOpen, setRenameExtensionWarningOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [pendingDeletedPaths, setPendingDeletedPaths] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const uploadAbortRef = useRef<AbortController | null>(null);
@@ -228,6 +231,7 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
   const lineNumbersRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
   const previousServerIdRef = useRef(server.id);
+  const { stageDelete, undoOverlay } = useStagedDeleteUndo();
 
   const hasSelection = selectedNames.size > 0;
   const uploadMaxMb = Math.max(1, Math.round(uploadMaxBytes / (1024 * 1024)));
@@ -266,6 +270,8 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
     setRecentUploadResults(new Map());
     setFolderSearch('');
     setEditingFile(null);
+    setPendingDeletedPaths(new Set());
+    setDeleteConfirmOpen(false);
   }, [server.id]);
 
   useEffect(() => {
@@ -322,6 +328,7 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
     }
     setIsRenameModalOpen(false);
   });
+  useEscapeKey(deleteConfirmOpen, () => setDeleteConfirmOpen(false));
 
   const navigateTo = (name: string) => {
     const newPath = currentPath === '.' ? name : `${currentPath}/${name}`;
@@ -342,9 +349,13 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
   const breadcrumbs = currentPath === '.' ? [] : currentPath.split('/');
   const normalizedFolderSearch = folderSearch.trim().toLowerCase();
   const filteredEntries = React.useMemo(() => {
-    if (!normalizedFolderSearch) return entries;
-    return entries.filter((entry) => entry.name.toLowerCase().includes(normalizedFolderSearch));
-  }, [entries, normalizedFolderSearch]);
+    const visibleEntries = entries.filter((entry) => {
+      const entryPath = currentPath === '.' ? entry.name : `${currentPath}/${entry.name}`;
+      return !pendingDeletedPaths.has(entryPath);
+    });
+    if (!normalizedFolderSearch) return visibleEntries;
+    return visibleEntries.filter((entry) => entry.name.toLowerCase().includes(normalizedFolderSearch));
+  }, [currentPath, entries, normalizedFolderSearch, pendingDeletedPaths]);
   const allVisibleSelected = filteredEntries.length > 0 && filteredEntries.every((entry) => selectedNames.has(entry.name));
 
   const highlightFolderMatch = (value: string) => {
@@ -529,24 +540,55 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
     }
   };
 
-  const handleDelete = async () => {
+  const handleDelete = () => {
     if (selectedNames.size === 0) return;
-    const paths = Array.from(selectedNames).map(name =>
-      currentPath === '.' ? name : `${currentPath}/${name}`
-    );
-    try {
-      for (const targetPath of paths) {
-        const res = await fetch(`/api/servers/${server.id}/files?path=${encodeURIComponent(targetPath)}`, {
-          method: 'DELETE',
-        });
-        if (!res.ok) throw new Error('Failed to delete');
-      }
-      toast.success(`Deleted ${paths.length} item(s)`);
-      setSelectedNames(new Set());
-      fetchFiles();
-    } catch (err) {
-      toast.error('Failed to delete');
+    setDeleteConfirmOpen(true);
+  };
+
+  const handleConfirmDelete = () => {
+    if (selectedNames.size === 0) {
+      setDeleteConfirmOpen(false);
+      return;
     }
+
+    const selected = Array.from(selectedNames);
+    const paths = selected.map((name) => (currentPath === '.' ? name : `${currentPath}/${name}`));
+    const itemCount = paths.length;
+
+    setPendingDeletedPaths((prev) => {
+      const next = new Set(prev);
+      paths.forEach((path) => next.add(path));
+      return next;
+    });
+    setSelectedNames(new Set());
+    setDeleteConfirmOpen(false);
+
+    stageDelete({
+      label: `${itemCount} item${itemCount > 1 ? 's' : ''}`,
+      successMessage: `Deleted ${itemCount} item${itemCount > 1 ? 's' : ''}`,
+      errorMessage: 'Failed to delete',
+      onUndo: () => {
+        setPendingDeletedPaths((prev) => {
+          const next = new Set(prev);
+          paths.forEach((path) => next.delete(path));
+          return next;
+        });
+      },
+      onCommit: async () => {
+        for (const targetPath of paths) {
+          const res = await fetch(`/api/servers/${server.id}/files?path=${encodeURIComponent(targetPath)}`, {
+            method: 'DELETE',
+          });
+          if (!res.ok) throw new Error('Failed to delete');
+        }
+        setPendingDeletedPaths((prev) => {
+          const next = new Set(prev);
+          paths.forEach((path) => next.delete(path));
+          return next;
+        });
+        await fetchFiles();
+      },
+    });
   };
 
   const handleDownload = async () => {
@@ -1198,6 +1240,42 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
         )}
       </div>
 
+      <AnimatePresence>
+        {deleteConfirmOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-md bg-[#252524] border border-red-900/50 rounded-lg shadow-2xl p-6"
+            >
+              <h3 className="text-xl font-bold text-white mb-3">Delete selected items?</h3>
+              <p className="text-gray-300 mb-6">
+                {selectedNames.size > 1
+                  ? 'Are you sure you want to delete the chosen files?'
+                  : 'Are you sure you want to delete the chosen file?'}
+              </p>
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirmOpen(false)}
+                  className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDelete}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold"
+                >
+                  Confirm
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Editor Modal */}
       <AnimatePresence>
         {editingFile && (
@@ -1624,6 +1702,7 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
           </div>
         )}
       </AnimatePresence>
+      {undoOverlay}
     </div>
   );
 };
