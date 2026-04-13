@@ -5,6 +5,7 @@ import { clsx } from 'clsx';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
 import { useEscapeKey } from '../hooks/useEscapeKey';
+import { useStagedDeleteUndo } from '../hooks/useStagedDeleteUndo';
 
 type LogTab = 'live' | 'crash-reports';
 
@@ -160,6 +161,9 @@ const StoredLogs = ({ serverId }: { serverId: string }) => {
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [viewer, setViewer] = useState<{ name: string | null; content: string | null }>({ name: null, content: null });
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [pendingDeletedFiles, setPendingDeletedFiles] = useState<Set<string>>(new Set());
+  const { stageDelete, undoOverlay } = useStagedDeleteUndo();
 
   const fetchFiles = useCallback(async () => {
     setLoadingFiles(true);
@@ -176,6 +180,15 @@ const StoredLogs = ({ serverId }: { serverId: string }) => {
   }, [serverId]);
 
   useEffect(() => { fetchFiles(); }, [fetchFiles]);
+
+  useEffect(() => {
+    setSelectedFiles(new Set());
+    setPendingDeletedFiles(new Set());
+    setDeleteTarget(null);
+    setBatchDeleteConfirm(false);
+  }, [serverId]);
+  useEscapeKey(!!deleteTarget, () => setDeleteTarget(null));
+  useEscapeKey(batchDeleteConfirm, () => setBatchDeleteConfirm(false));
 
   const handleToggleFile = (name: string) => {
     setSelectedFiles(prev => {
@@ -214,33 +227,80 @@ const StoredLogs = ({ serverId }: { serverId: string }) => {
     }
   };
 
-  const deleteFile = async (name: string) => {
-    try {
-      const path = `logs/${name}`;
-      const res = await fetch(`/api/servers/${serverId}/files?path=${encodeURIComponent(path)}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Failed to delete');
-      toast.success('Log deleted');
-      setSelectedFiles(prev => { const next = new Set(prev); next.delete(name); return next; });
-      fetchFiles();
-    } catch (err) {
-      toast.error('Failed to delete log file');
-    }
+  const deleteFile = (name: string) => {
+    setDeleteTarget(null);
+    setSelectedFiles((prev) => {
+      const next = new Set(prev);
+      next.delete(name);
+      return next;
+    });
+    setPendingDeletedFiles((prev) => {
+      const next = new Set(prev);
+      next.add(name);
+      return next;
+    });
+    stageDelete({
+      label: `Log "${name}"`,
+      successMessage: 'Log deleted',
+      errorMessage: 'Failed to delete log file',
+      onUndo: () => {
+        setPendingDeletedFiles((prev) => {
+          const next = new Set(prev);
+          next.delete(name);
+          return next;
+        });
+      },
+      onCommit: async () => {
+        const path = `logs/${name}`;
+        const res = await fetch(`/api/servers/${serverId}/files?path=${encodeURIComponent(path)}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('Failed to delete');
+        setPendingDeletedFiles((prev) => {
+          const next = new Set(prev);
+          next.delete(name);
+          return next;
+        });
+        await fetchFiles();
+      },
+    });
   };
 
-  const handleBatchDelete = async () => {
+  const handleBatchDelete = () => {
     if (selectedFiles.size === 0) return;
-    try {
-      await Promise.all(Array.from(selectedFiles).map(name =>
-        fetch(`/api/servers/${serverId}/files?path=${encodeURIComponent('logs/' + name)}`, { method: 'DELETE' })
-      ));
-      toast.success(`${selectedFiles.size} log file${selectedFiles.size > 1 ? 's' : ''} deleted`);
-      setSelectedFiles(new Set());
-      setBatchDeleteConfirm(false);
-      fetchFiles();
-    } catch (err) {
-      toast.error('Failed to delete selected logs');
-    }
+    const names = Array.from(selectedFiles);
+    setBatchDeleteConfirm(false);
+    setSelectedFiles(new Set());
+    setPendingDeletedFiles((prev) => {
+      const next = new Set(prev);
+      names.forEach((name) => next.add(name));
+      return next;
+    });
+    stageDelete({
+      label: `${names.length} log file${names.length > 1 ? 's' : ''}`,
+      successMessage: `${names.length} log file${names.length > 1 ? 's' : ''} deleted`,
+      errorMessage: 'Failed to delete selected logs',
+      onUndo: () => {
+        setPendingDeletedFiles((prev) => {
+          const next = new Set(prev);
+          names.forEach((name) => next.delete(name));
+          return next;
+        });
+      },
+      onCommit: async () => {
+        for (const name of names) {
+          const res = await fetch(`/api/servers/${serverId}/files?path=${encodeURIComponent(`logs/${name}`)}`, { method: 'DELETE' });
+          if (!res.ok) throw new Error('Failed to delete');
+        }
+        setPendingDeletedFiles((prev) => {
+          const next = new Set(prev);
+          names.forEach((name) => next.delete(name));
+          return next;
+        });
+        await fetchFiles();
+      },
+    });
   };
+
+  const visibleFiles = files.filter((file) => !pendingDeletedFiles.has(file.name));
 
   return (
     <>
@@ -262,12 +322,14 @@ const StoredLogs = ({ serverId }: { serverId: string }) => {
           <thead className="bg-[#252524] text-gray-400 border-b border-[#3a3a3a]">
             <tr>
               <th className="px-4 py-4 w-12">
-                {files.length > 0 && (
+                {visibleFiles.length > 0 && (
                   <span
-                    onClick={() => setSelectedFiles(prev => prev.size === files.length ? new Set() : new Set(files.map(f => f.name)))}
-                    className={clsx('flex-shrink-0 cursor-pointer', selectedFiles.size === files.length ? 'text-[#E5B80B]' : 'text-gray-600')}
+                    onClick={() =>
+                      setSelectedFiles((prev) => (prev.size === visibleFiles.length ? new Set() : new Set(visibleFiles.map((f) => f.name))))
+                    }
+                    className={clsx('flex-shrink-0 cursor-pointer', selectedFiles.size === visibleFiles.length ? 'text-[#E5B80B]' : 'text-gray-600')}
                   >
-                    {selectedFiles.size === files.length ? <Check size={16} /> : <Square size={16} />}
+                    {selectedFiles.size === visibleFiles.length ? <Check size={16} /> : <Square size={16} />}
                   </span>
                 )}
               </th>
@@ -280,9 +342,9 @@ const StoredLogs = ({ serverId }: { serverId: string }) => {
           <tbody className="divide-y divide-[#3a3a3a]">
             {loadingFiles ? (
               <tr><td colSpan={5} className="px-6 py-8 text-center text-gray-500">Loading...</td></tr>
-            ) : files.length === 0 ? (
+            ) : visibleFiles.length === 0 ? (
               <tr><td colSpan={5} className="px-6 py-8 text-center text-gray-500">No log files found.</td></tr>
-            ) : files.map(file => (
+            ) : visibleFiles.map((file) => (
               <tr key={file.name} onClick={() => handleToggleFile(file.name)} className="transition-colors group cursor-pointer hover:bg-[#252524]">
                 <td className="px-4 py-4 w-12">
                   <span className={clsx('flex-shrink-0 cursor-pointer', selectedFiles.has(file.name) ? 'text-[#E5B80B]' : 'text-gray-600')}>
@@ -300,7 +362,7 @@ const StoredLogs = ({ serverId }: { serverId: string }) => {
                     <button onClick={(e) => { e.stopPropagation(); downloadFile(file.name); }} className="p-2 hover:bg-[#333] text-gray-300 rounded" title="Download">
                       <Download size={18} />
                     </button>
-                    <button onClick={(e) => { e.stopPropagation(); deleteFile(file.name); }} className="p-2 hover:bg-red-900/20 text-red-400 rounded" title="Delete">
+                    <button onClick={(e) => { e.stopPropagation(); setDeleteTarget(file.name); }} className="p-2 hover:bg-red-900/20 text-red-400 rounded" title="Delete">
                       <Trash2 size={18} />
                     </button>
                   </div>
@@ -341,6 +403,31 @@ const StoredLogs = ({ serverId }: { serverId: string }) => {
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {deleteTarget && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-md bg-[#252524] border border-red-900/50 rounded-lg shadow-2xl p-6"
+            >
+              <div className="flex items-center gap-3 text-red-500 mb-4">
+                <AlertTriangle size={24} />
+                <h3 className="text-xl font-bold">Delete Log File?</h3>
+              </div>
+              <p className="text-gray-300 mb-6">
+                Are you sure you want to delete the chosen file?
+              </p>
+              <div className="flex justify-end gap-3">
+                <button onClick={() => setDeleteTarget(null)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
+                <button onClick={() => deleteFile(deleteTarget)} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Confirm</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Batch Delete Confirmation Modal for Stored Logs */}
       <AnimatePresence>
         {batchDeleteConfirm && (
@@ -357,7 +444,7 @@ const StoredLogs = ({ serverId }: { serverId: string }) => {
                 <h3 className="text-xl font-bold">Delete {selectedFiles.size} Log File{selectedFiles.size > 1 ? 's' : ''}?</h3>
               </div>
               <p className="text-gray-300 mb-6">
-                Are you sure you want to delete {selectedFiles.size} selected log file{selectedFiles.size > 1 ? 's' : ''}? This action cannot be undone.
+                Are you sure you want to delete the chosen files?
               </p>
               <div className="flex justify-end gap-3">
                 <button onClick={() => setBatchDeleteConfirm(false)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
@@ -367,6 +454,7 @@ const StoredLogs = ({ serverId }: { serverId: string }) => {
           </div>
         )}
       </AnimatePresence>
+      {undoOverlay}
     </div>
     </>
   );
@@ -600,6 +688,9 @@ const CrashReports = () => {
   const [loading, setLoading] = useState(true);
   const [selectedReports, setSelectedReports] = useState<Set<string>>(new Set());
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [pendingDeletedReports, setPendingDeletedReports] = useState<Set<string>>(new Set());
+  const { stageDelete, undoOverlay } = useStagedDeleteUndo();
 
   const fetchReports = useCallback(async () => {
     if (!activeServer) return;
@@ -622,8 +713,12 @@ const CrashReports = () => {
 
   useEffect(() => {
     setSelectedReports(new Set());
+    setPendingDeletedReports(new Set());
+    setDeleteTarget(null);
+    setBatchDeleteConfirm(false);
   }, [activeServer?.id]);
 
+  useEscapeKey(!!deleteTarget, () => setDeleteTarget(null));
   useEscapeKey(batchDeleteConfirm, () => setBatchDeleteConfirm(false));
 
   const handleToggleSelect = (name: string) => {
@@ -636,10 +731,10 @@ const CrashReports = () => {
   };
 
   const handleToggleSelectAll = () => {
-    if (selectedReports.size === reports.length) {
+    if (selectedReports.size === visibleReports.length) {
       setSelectedReports(new Set());
     } else {
-      setSelectedReports(new Set(reports.map(r => r.name)));
+      setSelectedReports(new Set(visibleReports.map((r) => r.name)));
     }
   };
 
@@ -693,36 +788,82 @@ const CrashReports = () => {
     }
   };
 
-  const handleDelete = async (reportName: string) => {
+  const handleDelete = (reportName: string) => {
     if (!activeServer) return;
-    try {
-      const res = await fetch(`/api/servers/${activeServer.id}/crash-reports/${encodeURIComponent(reportName)}`, {
-        method: 'DELETE',
-      });
-      if (!res.ok) throw new Error('Failed to delete crash report');
-      toast.success('Crash report deleted');
-      setSelectedReports(new Set());
-      fetchReports();
-    } catch (err) {
-      toast.error('Failed to delete crash report');
-    }
+    setDeleteTarget(null);
+    setSelectedReports((prev) => {
+      const next = new Set(prev);
+      next.delete(reportName);
+      return next;
+    });
+    setPendingDeletedReports((prev) => {
+      const next = new Set(prev);
+      next.add(reportName);
+      return next;
+    });
+    stageDelete({
+      label: `Crash report "${reportName}"`,
+      successMessage: 'Crash report deleted',
+      errorMessage: 'Failed to delete crash report',
+      onUndo: () => {
+        setPendingDeletedReports((prev) => {
+          const next = new Set(prev);
+          next.delete(reportName);
+          return next;
+        });
+      },
+      onCommit: async () => {
+        const res = await fetch(`/api/servers/${activeServer.id}/crash-reports/${encodeURIComponent(reportName)}`, {
+          method: 'DELETE',
+        });
+        if (!res.ok) throw new Error('Failed to delete crash report');
+        setPendingDeletedReports((prev) => {
+          const next = new Set(prev);
+          next.delete(reportName);
+          return next;
+        });
+        await fetchReports();
+      },
+    });
   };
 
-  const handleBatchDelete = async () => {
+  const handleBatchDelete = () => {
     if (!activeServer || selectedReports.size === 0) return;
-    try {
-      for (const name of selectedReports) {
-        const res = await fetch(`/api/servers/${activeServer.id}/crash-reports/${encodeURIComponent(name)}`, { method: 'DELETE' });
-        if (!res.ok) throw new Error(`Failed to delete ${name}`);
-      }
-      toast.success(`${selectedReports.size} crash report${selectedReports.size > 1 ? 's' : ''} deleted`);
-      setBatchDeleteConfirm(false);
-      setSelectedReports(new Set());
-      fetchReports();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to delete crash reports');
-    }
+    const names = Array.from(selectedReports);
+    setBatchDeleteConfirm(false);
+    setSelectedReports(new Set());
+    setPendingDeletedReports((prev) => {
+      const next = new Set(prev);
+      names.forEach((name) => next.add(name));
+      return next;
+    });
+    stageDelete({
+      label: `${names.length} crash report${names.length > 1 ? 's' : ''}`,
+      successMessage: `${names.length} crash report${names.length > 1 ? 's' : ''} deleted`,
+      errorMessage: 'Failed to delete crash reports',
+      onUndo: () => {
+        setPendingDeletedReports((prev) => {
+          const next = new Set(prev);
+          names.forEach((name) => next.delete(name));
+          return next;
+        });
+      },
+      onCommit: async () => {
+        for (const name of names) {
+          const res = await fetch(`/api/servers/${activeServer.id}/crash-reports/${encodeURIComponent(name)}`, { method: 'DELETE' });
+          if (!res.ok) throw new Error(`Failed to delete ${name}`);
+        }
+        setPendingDeletedReports((prev) => {
+          const next = new Set(prev);
+          names.forEach((name) => next.delete(name));
+          return next;
+        });
+        await fetchReports();
+      },
+    });
   };
+
+  const visibleReports = reports.filter((report) => !pendingDeletedReports.has(report.name));
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
@@ -738,18 +879,18 @@ const CrashReports = () => {
             </button>
           </div>
         )}
-        <div className="bg-[#202020] border border-[#3a3a3a] rounded-lg min-h-0 overflow-auto max-h-[calc(100vh-220px)] scrollbar-thin scrollbar-thumb-gray-700">
+      <div className="bg-[#202020] border border-[#3a3a3a] rounded-lg min-h-0 overflow-auto max-h-[calc(100vh-220px)] scrollbar-thin scrollbar-thumb-gray-700">
           <div className="overflow-x-auto">
           <table className="w-full text-left min-w-[720px]">
             <thead className="bg-[#252524] text-gray-400 border-b border-[#3a3a3a]">
                <tr>
                  <th className="px-4 py-4 w-12">
-                   {reports.length > 0 && (
+                  {visibleReports.length > 0 && (
                      <span
                        onClick={handleToggleSelectAll}
-                       className={clsx('flex-shrink-0 cursor-pointer', selectedReports.size === reports.length ? 'text-[#E5B80B]' : 'text-gray-600')}
+                       className={clsx('flex-shrink-0 cursor-pointer', selectedReports.size === visibleReports.length ? 'text-[#E5B80B]' : 'text-gray-600')}
                      >
-                       {selectedReports.size === reports.length ? <Check size={16} /> : <Square size={16} />}
+                       {selectedReports.size === visibleReports.length ? <Check size={16} /> : <Square size={16} />}
                      </span>
                    )}
                  </th>
@@ -762,9 +903,9 @@ const CrashReports = () => {
           <tbody className="divide-y divide-[#3a3a3a]">
              {loading ? (
                <tr><td colSpan={5} className="px-6 py-8 text-center text-gray-500">Loading...</td></tr>
-             ) : reports.length === 0 ? (
+             ) : visibleReports.length === 0 ? (
                <tr><td colSpan={5} className="px-6 py-8 text-center text-gray-500">No crash reports found.</td></tr>
-             ) : reports.map(report => (
+             ) : visibleReports.map((report) => (
                <tr
                  key={report.name}
                  onClick={() => handleToggleSelect(report.name)}
@@ -799,7 +940,7 @@ const CrashReports = () => {
                       <button onClick={(e) => { e.stopPropagation(); handleDownload(report.name); }} className="p-2 hover:bg-[#333] text-gray-300 rounded" title="Download">
                         <Download size={18} />
                       </button>
-                      <button onClick={(e) => { e.stopPropagation(); handleDelete(report.name); }} className="p-2 hover:bg-red-900/30 text-red-400 rounded" title="Delete">
+                      <button onClick={(e) => { e.stopPropagation(); setDeleteTarget(report.name); }} className="p-2 hover:bg-red-900/30 text-red-400 rounded" title="Delete">
                         <Trash2 size={18} />
                       </button>
                    </div>
@@ -810,6 +951,31 @@ const CrashReports = () => {
         </table>
         </div>
       </div>
+
+      <AnimatePresence>
+        {deleteTarget && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-md bg-[#252524] border border-red-900/50 rounded-lg shadow-2xl p-6"
+            >
+              <div className="flex items-center gap-3 text-red-500 mb-4">
+                <AlertTriangle size={24} />
+                <h3 className="text-xl font-bold">Delete Crash Report?</h3>
+              </div>
+              <p className="text-gray-300 mb-6">
+                Are you sure you want to delete the chosen file?
+              </p>
+              <div className="flex justify-end gap-3">
+                <button onClick={() => setDeleteTarget(null)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
+                <button onClick={() => handleDelete(deleteTarget)} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Confirm</button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Batch Delete Confirmation Modal */}
       <AnimatePresence>
@@ -827,7 +993,7 @@ const CrashReports = () => {
                 <h3 className="text-xl font-bold">Delete {selectedReports.size} Crash Report{selectedReports.size > 1 ? 's' : ''}?</h3>
               </div>
               <p className="text-gray-300 mb-6">
-                Are you sure you want to delete {selectedReports.size} selected crash report{selectedReports.size > 1 ? 's' : ''}? This action cannot be undone.
+                Are you sure you want to delete the chosen files?
               </p>
               <div className="flex justify-end gap-3">
                 <button onClick={() => setBatchDeleteConfirm(false)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
@@ -867,6 +1033,7 @@ const CrashReports = () => {
           </div>
         )}
       </AnimatePresence>
+      {undoOverlay}
     </div>
   </div>
   );
