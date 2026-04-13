@@ -5,6 +5,7 @@ import { motion } from 'motion/react';
 import { toast } from 'sonner';
 import clsx from 'clsx';
 import { useEscapeKey } from '../hooks/useEscapeKey';
+import { useStagedDeleteUndo } from '../hooks/useStagedDeleteUndo';
 
 interface ServersPageProps {
   onViewChange: (view: 'servers' | 'management' | 'plugins' | 'backups' | 'logs' | 'cloning') => void;
@@ -168,24 +169,46 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
     onViewChange('management');
   };
 
-  const handleDeleteServer = async () => {
+  const handleDeleteServer = () => {
     if (selectedServerIds.size === 0) return;
-    try {
-      for (const serverId of selectedServerIds) {
-        const res = await fetch(`/api/servers/${serverId}`, { method: 'DELETE' });
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.error || `Failed to delete server ${serverId}`);
+    const serverIds = Array.from(selectedServerIds);
+    const deletedCount = serverIds.length;
+
+    setDeleteConfirm(false);
+    setSelectedServerIds(new Set());
+    setPendingDeletedServerIds((prev) => {
+      const next = new Set(prev);
+      serverIds.forEach((serverId) => next.add(serverId));
+      return next;
+    });
+
+    stageDelete({
+      label: `${deletedCount} server${deletedCount > 1 ? 's' : ''}`,
+      successMessage: deletedCount === 1 ? 'Server deleted permanently' : `${deletedCount} servers deleted permanently`,
+      errorMessage: 'Failed to delete server',
+      onUndo: () => {
+        setPendingDeletedServerIds((prev) => {
+          const next = new Set(prev);
+          serverIds.forEach((serverId) => next.delete(serverId));
+          return next;
+        });
+      },
+      onCommit: async () => {
+        for (const serverId of serverIds) {
+          const res = await fetch(`/api/servers/${serverId}`, { method: 'DELETE' });
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.error || `Failed to delete server ${serverId}`);
+          }
         }
-      }
-      toast.success(selectedServerIds.size === 1 ? 'Server deleted permanently' : `${selectedServerIds.size} servers deleted permanently`);
-      setSelectedServerIds(new Set());
-      setDeleteConfirm(false);
-      await refreshServers();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to delete server');
-      await refreshServers();
-    }
+        setPendingDeletedServerIds((prev) => {
+          const next = new Set(prev);
+          serverIds.forEach((serverId) => next.delete(serverId));
+          return next;
+        });
+        await refreshServers();
+      },
+    });
   };
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
@@ -237,10 +260,12 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
 
   const [selectedServerIds, setSelectedServerIds] = useState<Set<string>>(new Set());
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [pendingDeletedServerIds, setPendingDeletedServerIds] = useState<Set<string>>(new Set());
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const renameInputRef = useRef<HTMLInputElement>(null);
   const renameClickedRef = useRef(false);
+  const { stageDelete, undoOverlay } = useStagedDeleteUndo();
 
   const handleStartRename = (_e: React.MouseEvent, server: typeof servers[0]) => {
     if (selectedServerIds.has(server.id)) {
@@ -391,6 +416,8 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
   useEscapeKey(deleteConfirm, () => setDeleteConfirm(false));
   useEscapeKey(!!flagsPopup, () => setFlagsPopup(null));
   useEscapeKey(!!updatePopup, () => setUpdatePopup(null));
+
+  const visibleServers = servers.filter((server) => !pendingDeletedServerIds.has(server.id));
 
   if (isCreating) {
     return (
@@ -665,19 +692,19 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
         </div>
       </div>
 
-      {loading && servers.length === 0 ? (
+      {loading && visibleServers.length === 0 ? (
         <div className="flex items-center justify-center h-64 text-gray-500">
           <Loader2 size={32} className="animate-spin mr-3" />
           Loading servers...
         </div>
-      ) : servers.length === 0 ? (
+      ) : visibleServers.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-64 text-gray-500">
           <p className="text-lg mb-2">No servers yet</p>
           <p className="text-sm">Click "Create Server" to get started</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {servers.map((server) => (
+          {visibleServers.map((server) => (
             <motion.div
               key={server.id}
               initial={{ opacity: 0, y: 10 }}
@@ -968,7 +995,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
 
       {/* Delete Confirmation Popup */}
       {deleteConfirm && (() => {
-        const selectedServers = servers.filter(s => selectedServerIds.has(s.id));
+        const selectedServers = visibleServers.filter(s => selectedServerIds.has(s.id));
         const hasActive = selectedServers.some(s => s.status === 'Running' || s.status === 'Booting' || s.status === 'Installing');
 
         return (
@@ -991,8 +1018,8 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
                 {hasActive
                   ? "You can't delete servers that are currently running. Stop them first."
                   : selectedServers.length === 1
-                    ? <>Are you sure you want to delete <span className="font-bold text-white">{selectedServers[0].name}</span> permanently? <span className="text-red-400 font-medium">(That means forever!)</span></>
-                    : <>Are you sure you want to delete {selectedServers.length} servers permanently? <span className="text-red-400 font-medium">(That means forever!)</span></>
+                    ? <>Are you sure you want to delete <span className="font-bold text-white">{selectedServers[0].name}</span>?</>
+                    : <>Are you sure you want to delete {selectedServers.length} servers?</>
                 }
               </p>
               {selectedServers.length > 1 && !hasActive && (
@@ -1032,6 +1059,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
           </div>
         );
       })()}
+      {undoOverlay}
     </div>
   );
 };
