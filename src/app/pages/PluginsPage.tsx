@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../components/ui/tooltip';
 import clsx from 'clsx';
 import { useEscapeKey } from '../hooks/useEscapeKey';
+import { useStagedDeleteUndo } from '../hooks/useStagedDeleteUndo';
 
 type UploadConflictAction = 'prompt' | 'replace' | 'skip';
 
@@ -76,7 +77,9 @@ export const PluginsPage = () => {
   const [uploadConflict, setUploadConflict] = useState<UploadConflictState | null>(null);
   const [duplicateInstalledModalOpen, setDuplicateInstalledModalOpen] = useState(false);
   const [uploadMaxBytes, setUploadMaxBytes] = useState(256 * 1024 * 1024);
+  const [pendingDeletedPluginFiles, setPendingDeletedPluginFiles] = useState<Set<string>>(new Set());
   const uploadConflictResolverRef = useRef<((action: Exclude<UploadConflictAction, 'prompt'>) => void) | null>(null);
+  const { stageDelete, undoOverlay } = useStagedDeleteUndo();
 
   const isServerOff = activeServer?.status === 'Stopped' || activeServer?.status === 'Crashed' || activeServer?.status === 'Error';
 
@@ -142,6 +145,7 @@ export const PluginsPage = () => {
     setSourceConfirmOpen(false);
     setPendingSource(null);
     setEditingSources(new Set());
+    setPendingDeletedPluginFiles(new Set());
   }, [activeServerId]);
 
   useEscapeKey(isUploadModalOpen, () => setIsUploadModalOpen(false));
@@ -191,19 +195,43 @@ export const PluginsPage = () => {
 
   // Restart handled manually by user after updates.
 
-  const handleDelete = async (fileName: string) => {
+  const handleDelete = (fileName: string) => {
     if (!activeServer) return;
-    try {
-      const res = await fetch(`/api/servers/${activeServer.id}/plugins/${encodeURIComponent(fileName)}`, {
-        method: 'DELETE',
-      });
-      if (!res.ok) throw new Error(`Failed to delete ${itemLabel}`);
-      toast.success(`${itemLabelCap} deleted`);
-      setDeleteTarget(null);
-      fetchPlugins();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : `Failed to delete ${itemLabel}`);
-    }
+    setDeleteTarget(null);
+    setSelectedPlugins((prev) => {
+      const next = new Set(prev);
+      next.delete(fileName);
+      return next;
+    });
+    setPendingDeletedPluginFiles((prev) => {
+      const next = new Set(prev);
+      next.add(fileName);
+      return next;
+    });
+    stageDelete({
+      label: `${itemLabelCap} "${fileName}"`,
+      successMessage: `${itemLabelCap} deleted`,
+      errorMessage: `Failed to delete ${itemLabel}`,
+      onUndo: () => {
+        setPendingDeletedPluginFiles((prev) => {
+          const next = new Set(prev);
+          next.delete(fileName);
+          return next;
+        });
+      },
+      onCommit: async () => {
+        const res = await fetch(`/api/servers/${activeServer.id}/plugins/${encodeURIComponent(fileName)}`, {
+          method: 'DELETE',
+        });
+        if (!res.ok) throw new Error(`Failed to delete ${itemLabel}`);
+        setPendingDeletedPluginFiles((prev) => {
+          const next = new Set(prev);
+          next.delete(fileName);
+          return next;
+        });
+        await fetchPlugins();
+      },
+    });
   };
 
   const handleToggle = async (fileName: string) => {
@@ -224,7 +252,7 @@ export const PluginsPage = () => {
     if (!activeServer || selectedPlugins.size === 0) return;
     setUpdatingAll(true);
     try {
-      const toDisable = plugins.filter(p => selectedPlugins.has(p.fileName) && p.enabled);
+      const toDisable = visiblePlugins.filter((p) => selectedPlugins.has(p.fileName) && p.enabled);
       if (toDisable.length === 0) {
         toast.info('No enabled items in selection');
         return;
@@ -243,19 +271,39 @@ export const PluginsPage = () => {
     }
   };
 
-  const handleDeleteSelected = async () => {
+  const handleDeleteSelected = () => {
     if (!activeServer || selectedPlugins.size === 0) return;
-    try {
-      for (const name of Array.from(selectedPlugins)) {
-        const res = await fetch(`/api/servers/${activeServer.id}/plugins/${encodeURIComponent(name)}`, { method: 'DELETE' });
-        if (!res.ok) throw new Error(`Failed to delete ${name}`);
-      }
-      toast.success(`${selectedPlugins.size} ${itemLabelPlural} deleted`);
-      setSelectedPlugins(new Set());
-      fetchPlugins();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to delete selected');
-    }
+    const names = Array.from(selectedPlugins);
+    setSelectedPlugins(new Set());
+    setPendingDeletedPluginFiles((prev) => {
+      const next = new Set(prev);
+      names.forEach((name) => next.add(name));
+      return next;
+    });
+    stageDelete({
+      label: `${names.length} ${itemLabelPlural}`,
+      successMessage: `${names.length} ${itemLabelPlural} deleted`,
+      errorMessage: 'Failed to delete selected',
+      onUndo: () => {
+        setPendingDeletedPluginFiles((prev) => {
+          const next = new Set(prev);
+          names.forEach((name) => next.delete(name));
+          return next;
+        });
+      },
+      onCommit: async () => {
+        for (const name of names) {
+          const res = await fetch(`/api/servers/${activeServer.id}/plugins/${encodeURIComponent(name)}`, { method: 'DELETE' });
+          if (!res.ok) throw new Error(`Failed to delete ${name}`);
+        }
+        setPendingDeletedPluginFiles((prev) => {
+          const next = new Set(prev);
+          names.forEach((name) => next.delete(name));
+          return next;
+        });
+        await fetchPlugins();
+      },
+    });
   };
 
   const requestConflictAction = (fileName: string) =>
@@ -531,10 +579,10 @@ export const PluginsPage = () => {
   };
 
   const handleToggleAllPlugins = () => {
-    if (selectedPlugins.size === plugins.length) {
+    if (selectedPlugins.size === visiblePlugins.length) {
       setSelectedPlugins(new Set());
     } else {
-      setSelectedPlugins(new Set(plugins.map(p => p.fileName)));
+      setSelectedPlugins(new Set(visiblePlugins.map((p) => p.fileName)));
     }
   };
 
@@ -555,7 +603,7 @@ export const PluginsPage = () => {
       return;
     }
 
-    const selectedOutdated = plugins.filter(
+    const selectedOutdated = visiblePlugins.filter(
       p => selectedPlugins.has(p.fileName) && p.versionStatus === 'outdated' && p.updateUrl
     );
 
@@ -704,9 +752,10 @@ export const PluginsPage = () => {
     return <div className="flex items-center justify-center h-full text-gray-500">No server selected</div>;
   }
 
-  const outdatedPlugins = plugins.filter(p => p.versionStatus === 'outdated' && p.updateUrl);
+  const visiblePlugins = plugins.filter((plugin) => !pendingDeletedPluginFiles.has(plugin.fileName));
+  const outdatedPlugins = visiblePlugins.filter((p) => p.versionStatus === 'outdated' && p.updateUrl);
   const hasSelection = selectedPlugins.size > 0;
-  const allSelected = hasSelection && selectedPlugins.size === plugins.length;
+  const allSelected = hasSelection && selectedPlugins.size === visiblePlugins.length;
 
   // Dynamic button label based on selection
 
@@ -792,12 +841,12 @@ export const PluginsPage = () => {
               <thead className="bg-[#252524] text-gray-400 border-b border-[#3a3a3a]">
                 <tr>
                   <th className="px-4 py-4 w-12">
-                    {plugins.length > 0 && (
+                    {visiblePlugins.length > 0 && (
                       <span
                         onClick={handleToggleAllPlugins}
-                        className={clsx('flex-shrink-0 cursor-pointer', selectedPlugins.size === plugins.length ? 'text-[#E5B80B]' : 'text-gray-600')}
+                        className={clsx('flex-shrink-0 cursor-pointer', selectedPlugins.size === visiblePlugins.length ? 'text-[#E5B80B]' : 'text-gray-600')}
                       >
-                        {selectedPlugins.size === plugins.length ? <Check size={16} /> : <Square size={16} />}
+                        {selectedPlugins.size === visiblePlugins.length ? <Check size={16} /> : <Square size={16} />}
                       </span>
                     )}
                   </th>
@@ -811,7 +860,7 @@ export const PluginsPage = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#3a3a3a]">
-                {plugins.map(plugin => (
+                {visiblePlugins.map((plugin) => (
                   <tr
                     key={plugin.fileName}
                     onClick={() => handleTogglePlugin(plugin.fileName)}
@@ -944,7 +993,7 @@ export const PluginsPage = () => {
               </tbody>
             </table>
           </div>
-          {plugins.length === 0 && <div className="p-8 text-center text-gray-500">No {itemLabelPlural} installed.</div>}
+          {visiblePlugins.length === 0 && <div className="p-8 text-center text-gray-500">No {itemLabelPlural} installed.</div>}
         </div>
       )}
 
@@ -1079,7 +1128,7 @@ export const PluginsPage = () => {
                 <AlertTriangle size={24} />
                 <h3 className="text-xl font-bold">Delete {itemLabelCap}?</h3>
               </div>
-              <p className="text-gray-300 mb-6">Are you sure you want to delete <span className="font-bold text-white">{deleteTarget}</span>? This action cannot be undone.</p>
+              <p className="text-gray-300 mb-6">Are you sure you want to delete the chosen file?</p>
               <div className="flex justify-end gap-3">
                 <button onClick={() => setDeleteTarget(null)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
                 <button onClick={() => handleDelete(deleteTarget)} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Delete</button>
@@ -1104,7 +1153,7 @@ export const PluginsPage = () => {
                 <AlertTriangle size={24} />
                 <h3 className="text-xl font-bold">Delete {selectedPlugins.size} {itemLabelCap}{selectedPlugins.size > 1 ? 's' : ''}?</h3>
               </div>
-              <p className="text-gray-300 mb-6">Are you sure you want to delete the selected {itemLabelPlural}? This action cannot be undone.</p>
+              <p className="text-gray-300 mb-6">Are you sure you want to delete the chosen files?</p>
               <div className="flex justify-end gap-3">
                 <button onClick={() => setBatchDeleteConfirmPlugins(false)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
                 <button onClick={() => { setBatchDeleteConfirmPlugins(false); handleDeleteSelected(); }} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Delete</button>
@@ -1214,6 +1263,7 @@ export const PluginsPage = () => {
           </div>
         )}
       </AnimatePresence>
+      {undoOverlay}
 
     </div>
   );
