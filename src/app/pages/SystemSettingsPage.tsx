@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Loader2, Cpu, HardDrive, ChevronDown, ChevronUp, Settings, Square } from 'lucide-react';
+import { Loader2, Cpu, HardDrive, ChevronDown, ChevronUp, Settings, Square, X } from 'lucide-react';
 import { Area, AreaChart, ResponsiveContainer } from 'recharts';
 import { toast } from 'sonner';
 import clsx from 'clsx';
@@ -211,7 +211,7 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
     const loadSettings = async () => {
       try {
         const res = await fetch('/api/settings');
-        if (!res.ok) throw new Error('Failed to load settings');
+        if (!res.ok) throw new Error('Couldn’t load settings.');
         const data = await res.json();
         if (isMounted) {
           setLoginUser(data.loginUser || 'mcpanel');
@@ -240,7 +240,7 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
           });
         }
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'Failed to load settings');
+        toast.error(err instanceof Error ? err.message : 'Couldn’t load settings.');
       } finally {
         if (isMounted) setLoading(false);
       }
@@ -326,7 +326,7 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
 
     const pollInterval = parseInt(String(statusPollInterval), 10);
     if (isNaN(pollInterval) || pollInterval < 1 || pollInterval > 30) {
-      toast.error('Insert a valid value.');
+      toast.error('Please enter a valid number.');
       return;
     }
     const parsedTpsPoll = parseInt(String(tpsPollInterval), 10);
@@ -365,7 +365,7 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to save settings');
+        throw new Error(data.error || 'Couldn’t save settings. Try again.');
       }
       setLoginPassword('');
       setSavedSnapshot({
@@ -382,10 +382,25 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
       });
       toast.success('Applied changes.');
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save settings');
+      toast.error(err instanceof Error ? err.message : 'Couldn’t save settings. Try again.');
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleDismissUnsavedChanges = () => {
+    if (!savedSnapshot) return;
+    setLoginUser(savedSnapshot.loginUser);
+    setLoginPassword(savedSnapshot.loginPassword || '');
+    setUserAgent(savedSnapshot.userAgent);
+    setDefaultMinRam(savedSnapshot.defaultMinRam);
+    setDefaultMaxRam(savedSnapshot.defaultMaxRam);
+    setDefaultFlags(savedSnapshot.defaultFlags);
+    setStatusPollInterval(savedSnapshot.statusPollInterval);
+    setTpsPollInterval(savedSnapshot.tpsPollInterval);
+    setPlayerSyncInterval(savedSnapshot.playerSyncInterval);
+    setPingPollInterval(savedSnapshot.pingPollInterval);
+    toast.info('Unsaved changes discarded.');
   };
 
   return (
@@ -691,17 +706,39 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
       </div>
 
       {hasUnsavedChanges && !loading && (
-        <div className="fixed bottom-4 right-4 z-[85] rounded-md border border-[#E5B80B] bg-[#E5B80B]/95 px-4 py-3 text-black shadow-2xl min-w-[320px]">
-          <div className="flex items-center justify-between gap-4">
-            <p className="text-sm font-semibold">Careful! You have unsaved changes.</p>
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={saving}
-              className="rounded border border-black/30 bg-black px-3 py-1.5 text-xs font-bold text-[#E5B80B] hover:bg-[#111] disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {saving ? 'Saving...' : 'Save'}
-            </button>
+        <div className="fixed bottom-4 right-4 z-[85] min-w-[340px]">
+          <div className="relative overflow-hidden rounded-lg border border-[#3a3a3a] bg-[#252524] shadow-2xl">
+            <div className="flex items-start justify-between gap-3 px-4 py-3">
+              <div className="flex items-start gap-3 text-sm text-gray-200">
+                <div className="mt-0.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-[#E5B80B]/20 text-[#E5B80B]">
+                  <Settings size={14} />
+                </div>
+                <div>
+                  <p className="font-semibold text-white leading-none">Unsaved changes</p>
+                  <p className="text-sm text-gray-300 mt-1">Careful! You have unsaved changes.</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 pt-0.5">
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="rounded bg-[#E5B80B] px-3 py-1.5 text-xs font-bold text-black hover:bg-[#d4a90a] disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
+                >
+                  {saving && <Loader2 size={12} className="animate-spin" />}
+                  {saving ? 'Saving...' : 'Save'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDismissUnsavedChanges}
+                  disabled={saving}
+                  className="inline-flex h-5 w-5 items-center justify-center rounded-full text-gray-400 hover:text-[#E5B80B] disabled:opacity-50 disabled:cursor-not-allowed"
+                  aria-label="Discard unsaved changes"
+                >
+                  <X size={11} />
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
