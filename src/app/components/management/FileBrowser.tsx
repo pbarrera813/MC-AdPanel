@@ -860,7 +860,7 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
       if (err instanceof DOMException && err.name === 'AbortError') {
         toast.info('Upload cancelled');
       } else {
-        toast.error(err instanceof Error ? err.message : 'Upload failed');
+        toast.error(err instanceof Error ? err.message : 'Couldn’t upload file. Try again.');
       }
     } finally {
       if (uploadConflictResolverRef.current) {
