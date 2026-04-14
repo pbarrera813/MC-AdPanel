@@ -109,6 +109,9 @@ func main() {
 	mux.HandleFunc("PUT /api/servers/{id}/name", serverHandler.Rename)
 	mux.HandleFunc("DELETE /api/servers/{id}", serverHandler.Delete)
 	mux.HandleFunc("POST /api/servers/clone", serverHandler.Clone)
+	mux.HandleFunc("POST /api/servers/import/analyze", serverHandler.AnalyzeImport)
+	mux.HandleFunc("POST /api/servers/import/commit", serverHandler.CommitImport)
+	mux.HandleFunc("DELETE /api/servers/import/analyze/{id}", serverHandler.CancelImport)
 
 	// Version fetching
 	mux.HandleFunc("GET /api/versions/{type}", versionHandler.List)
