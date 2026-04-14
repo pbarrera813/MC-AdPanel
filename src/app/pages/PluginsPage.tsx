@@ -402,7 +402,7 @@ export const PluginsPage = () => {
       if (err instanceof DuplicateInstalledError) {
         return;
       }
-      toast.error(err instanceof Error ? err.message : 'Upload failed');
+      toast.error(err instanceof Error ? err.message : 'Couldn’t upload file. Try again.');
     } finally {
       if (uploadConflictResolverRef.current) {
         uploadConflictResolverRef.current('skip');
