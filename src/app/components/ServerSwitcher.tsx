@@ -59,7 +59,7 @@ export const ServerSwitcher = ({ variant = 'sidebar', className }: ServerSwitche
       {hasMultiple && (
         <DropdownMenuContent
           align={variant === 'header' ? 'start' : 'center'}
-          className="bg-[#252524]/98 border border-[#3a3a3a] text-gray-200 w-[var(--radix-dropdown-menu-trigger-width)] max-h-40 rounded-lg p-1 shadow-[0_14px_40px_rgba(0,0,0,0.45)]"
+          className="!bg-[#252524] border border-[#3a3a3a] text-gray-200 w-[var(--radix-dropdown-menu-trigger-width)] max-h-40 rounded-lg p-1 shadow-[0_14px_40px_rgba(0,0,0,0.45)]"
         >
           {servers.map(server => (
             <DropdownMenuItem
