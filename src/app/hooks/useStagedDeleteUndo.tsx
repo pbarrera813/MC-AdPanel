@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { RotateCcw, Trash2 } from 'lucide-react';
+import { Trash2, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { toast } from 'sonner';
 
@@ -124,31 +124,39 @@ export const useStagedDeleteUndo = () => {
                 initial={{ opacity: 0, y: 8, scale: 0.98 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 8, scale: 0.98 }}
-                className="pointer-events-auto rounded-md border border-[#5b4a17] bg-[#1f1b11] px-4 py-3 shadow-xl min-w-[300px]"
+                className="pointer-events-auto relative overflow-hidden rounded-lg border border-[#3a3a3a] bg-[#252524] shadow-xl min-w-[340px]"
               >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-2 text-sm text-gray-200">
-                    <Trash2 size={14} className="mt-0.5 text-[#E5B80B]" />
+                <div
+                  className="flex items-start justify-between gap-3 px-4 py-3 cursor-pointer"
+                  onClick={() => undoAction(action.id)}
+                >
+                  <div className="flex items-start gap-3 text-sm text-gray-200">
+                    <div className="mt-0.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-[#E5B80B]/20 text-[#E5B80B]">
+                      <Trash2 size={14} />
+                    </div>
                     <div>
-                      <p className="font-medium">{action.label} removed.</p>
-                      <p className="text-xs text-gray-400">
-                        {action.committing ? 'Deleting permanently...' : 'Undo available'}
-                      </p>
+                      <p className="font-semibold text-white leading-none">Deleted</p>
+                      <p className="text-sm text-gray-300 mt-1">{action.label} removed.</p>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    disabled={action.committing}
-                    onClick={() => undoAction(action.id)}
-                    className="inline-flex items-center gap-1 rounded border border-[#E5B80B] px-2.5 py-1 text-xs font-bold text-[#E5B80B] hover:bg-[#E5B80B]/10 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <RotateCcw size={12} />
-                    Undo
-                  </button>
+                  <div className="flex items-center">
+                    <button
+                      type="button"
+                      disabled={action.committing}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void commitAction(action.id);
+                      }}
+                      className="inline-flex h-5 w-5 items-center justify-center rounded-full text-gray-400 hover:text-[#E5B80B] disabled:opacity-50 disabled:cursor-not-allowed"
+                      aria-label="Confirm delete now"
+                    >
+                      <X size={11} />
+                    </button>
+                  </div>
                 </div>
-                <div className="mt-2 h-1.5 rounded bg-[#2f2f2f] overflow-hidden">
+                <div className="absolute left-0 right-0 bottom-0 h-1.5 bg-[#3a3a3a] overflow-hidden">
                   <div
-                    className="h-full bg-[#7a7a7a] transition-[width] duration-100 ease-linear"
+                    className="h-full bg-[#6f6f6f] transition-[width] duration-100 ease-linear"
                     style={{ width: `${action.progressPercent}%` }}
                   />
                 </div>
@@ -158,7 +166,7 @@ export const useStagedDeleteUndo = () => {
         )}
       </AnimatePresence>
     ),
-    [actions, undoAction]
+    [actions, commitAction, undoAction]
   );
 
   return { stageDelete, undoOverlay };
