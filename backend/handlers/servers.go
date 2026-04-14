@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -23,12 +24,18 @@ type CreateServerRequest struct {
 
 // ServerHandler handles all server REST endpoints
 type ServerHandler struct {
-	mgr *minecraft.Manager
+	mgr            *minecraft.Manager
+	uploadMaxBytes int64
+	importMaxBytes int64
 }
 
 // NewServerHandler creates a new ServerHandler
 func NewServerHandler(mgr *minecraft.Manager) *ServerHandler {
-	return &ServerHandler{mgr: mgr}
+	return &ServerHandler{
+		mgr:            mgr,
+		uploadMaxBytes: uploadMaxBytesFromEnv(),
+		importMaxBytes: serverImportMaxBytesFromEnv(),
+	}
 }
 
 // List handles GET /api/servers
@@ -254,6 +261,116 @@ func (h *ServerHandler) Clone(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusCreated, server)
+}
+
+// AnalyzeImport handles POST /api/servers/import/analyze (multipart form)
+func (h *ServerHandler) AnalyzeImport(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, h.importMaxBytes)
+	if err := r.ParseMultipartForm(8 << 20); err != nil {
+		if isRequestBodyTooLarge(err) {
+			respondError(w, http.StatusRequestEntityTooLarge, "uploaded file exceeds maximum allowed size")
+			return
+		}
+		respondError(w, http.StatusBadRequest, "Failed to parse form data")
+		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "No file provided")
+		return
+	}
+	defer file.Close()
+
+	result, err := h.mgr.AnalyzeServerImportArchive(header.Filename, file)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, result)
+}
+
+// CommitImport handles POST /api/servers/import/commit
+func (h *ServerHandler) CommitImport(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		AnalysisID   string  `json:"analysisId"`
+		TypeOverride string  `json:"typeOverride"`
+		Name         *string `json:"name"`
+		Port         *int    `json:"port"`
+		Version      *string `json:"version"`
+		Properties   *struct {
+			MaxPlayers *int    `json:"maxPlayers"`
+			Motd       *string `json:"motd"`
+			WhiteList  *bool   `json:"whiteList"`
+			OnlineMode *bool   `json:"onlineMode"`
+		} `json:"properties"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if strings.TrimSpace(req.AnalysisID) == "" {
+		respondError(w, http.StatusBadRequest, "analysisId is required")
+		return
+	}
+
+	opts := minecraft.ServerImportCommitOptions{
+		Name:         req.Name,
+		Port:         req.Port,
+		TypeOverride: req.TypeOverride,
+		Version:      req.Version,
+	}
+	if req.Properties != nil {
+		opts.MaxPlayers = req.Properties.MaxPlayers
+		opts.Motd = req.Properties.Motd
+		opts.WhiteList = req.Properties.WhiteList
+		opts.OnlineMode = req.Properties.OnlineMode
+	}
+
+	server, err := h.mgr.CommitServerImport(req.AnalysisID, opts)
+	if err != nil {
+		var portErr *minecraft.ImportPortConflictError
+		if errors.As(err, &portErr) {
+			respondJSON(w, http.StatusBadRequest, map[string]any{
+				"error":         "port_in_use",
+				"message":       "That port is already in use.",
+				"suggestedPort": portErr.SuggestedPort,
+			})
+			return
+		}
+		var versionErr *minecraft.ImportInvalidVersionError
+		if errors.As(err, &versionErr) {
+			respondJSON(w, http.StatusBadRequest, map[string]any{
+				"error":   "invalid_server_version",
+				"message": versionErr.Error(),
+			})
+			return
+		}
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusCreated, server)
+}
+
+// CancelImport handles DELETE /api/servers/import/analyze/{id}
+func (h *ServerHandler) CancelImport(w http.ResponseWriter, r *http.Request) {
+	analysisID := r.PathValue("id")
+	if strings.TrimSpace(analysisID) == "" {
+		respondError(w, http.StatusBadRequest, "analysis id is required")
+		return
+	}
+
+	if err := h.mgr.CancelServerImportAnalysis(analysisID); err != nil {
+		respondError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
 }
 
 // RetryInstall handles POST /api/servers/{id}/retry-install
