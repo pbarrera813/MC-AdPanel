@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	defaultMaxUploadBytes int64 = 256 * 1024 * 1024
-	defaultCSRFMode             = "enforce"
+	defaultMaxUploadBytes       int64 = 256 * 1024 * 1024
+	defaultMaxServerImportBytes int64 = 8 * 1024 * 1024 * 1024
+	defaultCSRFMode                   = "enforce"
 )
 
 type trustedProxySet struct {
@@ -270,6 +271,19 @@ func uploadMaxBytesFromEnv() int64 {
 	if err != nil || n <= 0 {
 		log.Printf("Invalid ADPANEL_MAX_UPLOAD_BYTES value %q, using default %d", raw, defaultMaxUploadBytes)
 		return defaultMaxUploadBytes
+	}
+	return n
+}
+
+func serverImportMaxBytesFromEnv() int64 {
+	raw := strings.TrimSpace(os.Getenv("ADPANEL_MAX_SERVER_IMPORT_BYTES"))
+	if raw == "" {
+		return defaultMaxServerImportBytes
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n <= 0 {
+		log.Printf("Invalid ADPANEL_MAX_SERVER_IMPORT_BYTES value %q, using default %d", raw, defaultMaxServerImportBytes)
+		return defaultMaxServerImportBytes
 	}
 	return n
 }
