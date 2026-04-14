@@ -289,9 +289,12 @@ type Manager struct {
 	serversRootReal    string
 	backupsRoot        string
 	backupsRootReal    string
+	importsRoot        string
 	quarantinedServers map[string]string
+	importAnalyses     map[string]*ServerImportAnalysis
 	stopScheduler      chan struct{}
 	stopUsageSampler   chan struct{}
+	stopImportCleanup  chan struct{}
 	hostLogicalCPUs    int
 	hostTotalRAMBytes  uint64
 	usageMu            sync.RWMutex
@@ -932,6 +935,10 @@ func NewManager(baseDir string) (*Manager, error) {
 	if err := os.MkdirAll(backupsDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create backups directory: %w", err)
 	}
+	importsDir := filepath.Join(dataDir, "imports")
+	if err := os.MkdirAll(importsDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create imports directory: %w", err)
+	}
 	serversRootAbs, err := filepath.Abs(filepath.Clean(serversDir))
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve servers directory: %w", err)
@@ -959,9 +966,12 @@ func NewManager(baseDir string) (*Manager, error) {
 		serversRootReal:    serversRootReal,
 		backupsRoot:        backupsRootAbs,
 		backupsRootReal:    backupsRootReal,
+		importsRoot:        importsDir,
 		quarantinedServers: make(map[string]string),
+		importAnalyses:     make(map[string]*ServerImportAnalysis),
 		stopScheduler:      make(chan struct{}),
 		stopUsageSampler:   make(chan struct{}),
+		stopImportCleanup:  make(chan struct{}),
 	}
 	mgr.loadHostUsageMetadata()
 
@@ -1006,6 +1016,7 @@ func NewManager(baseDir string) (*Manager, error) {
 	// Start the scheduled backup checker
 	go mgr.runBackupScheduler()
 	go mgr.runUsageSampler()
+	go mgr.runImportAnalysisCleanup()
 
 	return mgr, nil
 }
@@ -2570,6 +2581,7 @@ func (m *Manager) StopAll() {
 	// Stop the backup scheduler
 	close(m.stopScheduler)
 	close(m.stopUsageSampler)
+	close(m.stopImportCleanup)
 
 	m.mu.RLock()
 	ids := make([]string, 0)
