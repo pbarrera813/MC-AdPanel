@@ -121,7 +121,7 @@ export default function App() {
       // surface global errors in console and optional toast so developer can copy stack
       // eslint-disable-next-line no-console
       console.error('Global error:', ev?.error || ev?.reason || ev);
-      try { toast.error('An unexpected error occurred — check console for details'); } catch {}
+      try { toast.error('Something went wrong. Please try again.'); } catch {}
     };
 
     window.addEventListener('error', handler);
