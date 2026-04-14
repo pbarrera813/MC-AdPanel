@@ -327,23 +327,38 @@ export const BackupsPage = () => {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 opacity-60 group-hover:opacity-100 transition-opacity md:self-auto self-end">
+              <div
+                className="flex items-center gap-2 opacity-60 group-hover:opacity-100 transition-opacity md:self-auto self-end"
+                onClick={(e) => e.stopPropagation()}
+              >
                 <button
-                  onClick={() => setRestoreTarget(backup.name)}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setRestoreTarget(backup.name);
+                  }}
                   className="p-2 hover:bg-blue-900/30 text-blue-400 rounded"
                   title="Restore"
                 >
                   <Upload size={20} />
                 </button>
                 <button
-                  onClick={() => handleDownload(backup.name)}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDownload(backup.name);
+                  }}
                   className="p-2 hover:bg-[#333] text-gray-300 rounded"
                   title="Download"
                 >
                   <Download size={20} />
                 </button>
                 <button
-                  onClick={() => setDeleteTarget(backup.name)}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDeleteTarget(backup.name);
+                  }}
                   className="p-2 hover:bg-red-900/30 text-red-400 rounded"
                   title="Delete"
                 >
