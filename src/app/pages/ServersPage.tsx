@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useServer } from '../context/ServerContext';
-import { Plus, Cpu, HardDrive, Play, Square, AlertTriangle, ArrowLeft, Check, ChevronDown, ChevronUp, Loader2, RotateCw, Power, Settings2, X, Trash2 } from 'lucide-react';
-import { motion } from 'motion/react';
+import { Plus, Cpu, HardDrive, Play, Square, AlertTriangle, ArrowLeft, Check, ChevronDown, ChevronUp, Loader2, RotateCw, Power, Settings2, X, Trash2, FileUp, Upload } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import { toast } from 'sonner';
 import clsx from 'clsx';
 import { useEscapeKey } from '../hooks/useEscapeKey';
@@ -18,6 +18,39 @@ const SERVER_TYPES = [
 interface VersionInfo {
   version: string;
   latest: boolean;
+}
+
+interface ImportProperties {
+  maxPlayers?: number;
+  motd?: string;
+  whiteList?: boolean;
+  onlineMode?: boolean;
+}
+
+interface ImportAnalysis {
+  analysisId: string;
+  serverType: string;
+  typeDetected: boolean;
+  version: string;
+  worlds: string[];
+  plugins: string[];
+  mods: string[];
+  properties: ImportProperties;
+  resolvedName: string;
+  resolvedPort: number;
+}
+
+type ImportBoolState = 'true' | 'false';
+
+interface ImportFormState {
+  name: string;
+  port: string;
+  serverType: string;
+  version: string;
+  maxPlayers: string;
+  motd: string;
+  whiteList: ImportBoolState;
+  onlineMode: ImportBoolState;
 }
 
 type JVMFlagsPreset = 'none' | 'aikars' | 'velocity' | 'modded';
@@ -47,6 +80,19 @@ const compareVersionStrings = (a: string, b: string) => {
   return 0;
 };
 
+const importInfoContainerVariants = {
+  hidden: { opacity: 0 },
+  show: {
+    opacity: 1,
+    transition: { staggerChildren: 0.03, delayChildren: 0.04 },
+  },
+};
+
+const importInfoItemVariants = {
+  hidden: { opacity: 0, y: 6 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.18, ease: 'easeOut' } },
+};
+
 export const ServersPage = ({ onViewChange }: ServersPageProps) => {
   const { servers, setActiveServerId, startServer, stopServer, addServer, refreshServers, loading } = useServer();
   const [isCreating, setIsCreating] = useState(false);
@@ -62,6 +108,28 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
   const [typeVersionCatalog, setTypeVersionCatalog] = useState<Record<string, VersionInfo[]>>({});
   const [updatePopup, setUpdatePopup] = useState<{ serverId: string; serverName: string; currentVersion: string; selectedVersion: string; options: VersionInfo[] } | null>(null);
   const [updatingVersion, setUpdatingVersion] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [importDragActive, setImportDragActive] = useState(false);
+  const [isImportUploading, setIsImportUploading] = useState(false);
+  const [isImportAnalyzing, setIsImportAnalyzing] = useState(false);
+  const [isImportSubmitting, setIsImportSubmitting] = useState(false);
+  const [importUploadProgress, setImportUploadProgress] = useState(0);
+  const [importAnalysis, setImportAnalysis] = useState<ImportAnalysis | null>(null);
+  const [importArchiveName, setImportArchiveName] = useState('');
+  const [importForm, setImportForm] = useState<ImportFormState>({
+    name: '',
+    port: '',
+    serverType: '',
+    version: '',
+    maxPlayers: '',
+    motd: '',
+    whiteList: 'false',
+    onlineMode: 'true',
+  });
+  const [importVersionOptions, setImportVersionOptions] = useState<VersionInfo[]>([]);
+  const [importVersionsLoading, setImportVersionsLoading] = useState(false);
+  const importFileInputRef = useRef<HTMLInputElement>(null);
+  const importAnalyzeXhrRef = useRef<XMLHttpRequest | null>(null);
 
   // Load system defaults for create form
   useEffect(() => {
@@ -110,7 +178,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
       })
       .catch(err => {
         console.error('Failed to fetch versions:', err);
-        toast.error('Failed to load versions for ' + formData.type);
+        toast.error('Couldn’t load versions for ' + formData.type + '.');
       })
       .finally(() => setVersionsLoading(false));
   }, [formData.type]);
@@ -254,7 +322,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
         toast.success('Server starting...');
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Action failed');
+      toast.error(err instanceof Error ? err.message : 'Couldn’t complete that action. Try again.');
     }
   };
 
@@ -397,6 +465,321 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
     }
   };
 
+  const cancelImportAnalysis = async (analysisId?: string) => {
+    const id = analysisId?.trim();
+    if (!id) return;
+    try {
+      await fetch(`/api/servers/import/analyze/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    } catch {
+      // Ignore cleanup errors; TTL cleanup on backend will handle leftovers.
+    }
+  };
+
+  const toImportBoolState = (value?: boolean | null): ImportBoolState => {
+    return value ? 'true' : 'false';
+  };
+
+  const fromImportBoolState = (value: ImportBoolState): boolean => {
+    if (value === 'true') return true;
+    return false;
+  };
+
+  const applyAnalysisToImportForm = (analysis: ImportAnalysis) => {
+    const detectedType = (analysis.serverType || '').trim();
+    const initialType = detectedType || SERVER_TYPES[0];
+    const detectedVersion = (analysis.version || '').trim();
+    setImportForm({
+      name: analysis.resolvedName || '',
+      port: analysis.resolvedPort ? String(analysis.resolvedPort) : '',
+      serverType: initialType,
+      version: detectedVersion,
+      maxPlayers: typeof analysis.properties.maxPlayers === 'number' ? String(analysis.properties.maxPlayers) : '',
+      motd: analysis.properties.motd || '',
+      whiteList: toImportBoolState(analysis.properties.whiteList ?? false),
+      onlineMode: toImportBoolState(analysis.properties.onlineMode ?? true),
+    });
+  };
+
+  const abortImportAnalyze = () => {
+    if (importAnalyzeXhrRef.current) {
+      importAnalyzeXhrRef.current.abort();
+      importAnalyzeXhrRef.current = null;
+    }
+    setIsImportUploading(false);
+    setIsImportAnalyzing(false);
+    setImportUploadProgress(0);
+  };
+
+  const resetImportState = () => {
+    abortImportAnalyze();
+    setImportDragActive(false);
+    setIsImportSubmitting(false);
+    setImportAnalysis(null);
+    setImportArchiveName('');
+    setImportForm({
+      name: '',
+      port: '',
+      serverType: '',
+      version: '',
+      maxPlayers: '',
+      motd: '',
+      whiteList: 'false',
+      onlineMode: 'true',
+    });
+    setImportVersionOptions([]);
+    setImportVersionsLoading(false);
+    if (importFileInputRef.current) {
+      importFileInputRef.current.value = '';
+    }
+  };
+
+  const closeImportModal = () => {
+    const analysisId = importAnalysis?.analysisId;
+    resetImportState();
+    setIsImportOpen(false);
+    void cancelImportAnalysis(analysisId);
+  };
+
+  const analyzeImportArchive = async (file: File | null) => {
+    if (!file) return;
+    const previousAnalysisId = importAnalysis?.analysisId;
+    resetImportState();
+    setImportArchiveName(file.name);
+    setIsImportUploading(true);
+    setImportUploadProgress(0);
+
+    if (previousAnalysisId) {
+      await cancelImportAnalysis(previousAnalysisId);
+    }
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const parsed = await new Promise<ImportAnalysis>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        importAnalyzeXhrRef.current = xhr;
+        xhr.open('POST', '/api/servers/import/analyze');
+        xhr.responseType = 'json';
+
+        xhr.upload.onprogress = (event) => {
+          if (!event.lengthComputable || event.total <= 0) return;
+          const progress = Math.min(100, Math.round((event.loaded / event.total) * 100));
+          setImportUploadProgress(progress);
+        };
+        xhr.upload.onload = () => {
+          setImportUploadProgress(100);
+          setIsImportUploading(false);
+          setIsImportAnalyzing(true);
+        };
+        xhr.onload = () => {
+          importAnalyzeXhrRef.current = null;
+          setIsImportUploading(false);
+          setIsImportAnalyzing(false);
+          const raw = xhr.response;
+          const payload = raw && typeof raw === 'object' ? raw : (() => {
+            try {
+              return JSON.parse(xhr.responseText || '{}');
+            } catch {
+              return {};
+            }
+          })();
+
+          if (xhr.status === 413) {
+            reject(new Error('uploaded file exceeds maximum allowed size'));
+            return;
+          }
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve(payload as ImportAnalysis);
+            return;
+          }
+          const message = typeof (payload as { error?: unknown }).error === 'string'
+            ? String((payload as { error?: string }).error)
+            : 'Couldn’t read that server file.';
+          reject(new Error(message));
+        };
+        xhr.onerror = () => {
+          importAnalyzeXhrRef.current = null;
+          setIsImportUploading(false);
+          setIsImportAnalyzing(false);
+          reject(new Error('Couldn’t read that server file.'));
+        };
+        xhr.onabort = () => {
+          importAnalyzeXhrRef.current = null;
+          setIsImportUploading(false);
+          setIsImportAnalyzing(false);
+          reject(new DOMException('Import analysis cancelled', 'AbortError'));
+        };
+
+        xhr.send(formData);
+      });
+      setImportAnalysis(parsed);
+      applyAnalysisToImportForm(parsed);
+      toast.success('Server file uploaded successfully.');
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        toast.info('Import analysis cancelled');
+        return;
+      }
+      toast.error(err instanceof Error ? err.message : 'Couldn’t read that server file.');
+    }
+  };
+
+  const handleImportDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setImportDragActive(false);
+    const file = e.dataTransfer.files?.[0] || null;
+    await analyzeImportArchive(file);
+  };
+
+  const handleImportPicker = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null;
+    await analyzeImportArchive(file);
+    e.target.value = '';
+  };
+
+  const handleCommitImport = async () => {
+    if (!importAnalysis) return;
+    if (!importForm.name.trim()) {
+      toast.error('Server name is required');
+      return;
+    }
+    const requiresTypeChoice = !importAnalysis.typeDetected;
+    if (requiresTypeChoice && !importForm.serverType.trim()) {
+      toast.error('Choose a server type to continue');
+      return;
+    }
+    const port = Number.parseInt(importForm.port, 10);
+    if (!Number.isFinite(port) || port < 1024 || port > 65535) {
+      toast.error('Port must be between 1024 and 65535');
+      return;
+    }
+    let maxPlayers: number | null = null;
+    const maxPlayersRaw = importForm.maxPlayers.trim();
+    if (maxPlayersRaw !== '') {
+      const parsedMaxPlayers = Number.parseInt(maxPlayersRaw, 10);
+      if (!Number.isFinite(parsedMaxPlayers) || parsedMaxPlayers <= 0) {
+        toast.error('Max players must be a positive number');
+        return;
+      }
+      maxPlayers = parsedMaxPlayers;
+    }
+    const versionLockedByDetection = !!importAnalysis.version?.trim();
+    if (!versionLockedByDetection) {
+      if (importVersionsLoading) {
+        toast.error('Wait until versions finish loading');
+        return;
+      }
+      const chosenVersion = importForm.version.trim();
+      if (!chosenVersion) {
+        toast.error('Choose a server version to continue');
+        return;
+      }
+      const isAllowedVersion = importVersionOptions.some((v) => v.version === chosenVersion);
+      if (!isAllowedVersion) {
+        toast.error('Selected version is not available for this server type');
+        return;
+      }
+    }
+
+    setIsImportSubmitting(true);
+    try {
+      const versionOverride = versionLockedByDetection ? undefined : importForm.version.trim();
+      const res = await fetch('/api/servers/import/commit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          analysisId: importAnalysis.analysisId,
+          name: importForm.name.trim(),
+          port,
+          typeOverride: requiresTypeChoice ? importForm.serverType.trim() : '',
+          version: versionOverride,
+          properties: {
+            maxPlayers,
+            motd: importForm.motd.trim() || null,
+            whiteList: fromImportBoolState(importForm.whiteList),
+            onlineMode: fromImportBoolState(importForm.onlineMode),
+          },
+        }),
+      });
+      const data = await res.json().catch(() => ({} as { error?: string; message?: string; suggestedPort?: number }));
+      if (!res.ok) {
+        const payload = data as { error?: string; message?: string; suggestedPort?: number };
+        if (payload.error === 'port_in_use') {
+          const suggestedPort = typeof payload.suggestedPort === 'number' ? payload.suggestedPort : null;
+          const hint = suggestedPort ? ` Closest free port: ${suggestedPort}.` : '';
+          toast.error(`That port is already in use.${hint}`);
+          return;
+        }
+        if (payload.error === 'invalid_server_version') {
+          toast.error(payload.message || 'Selected version is not valid for this server type');
+          return;
+        }
+        throw new Error(data.error || 'Failed to import server');
+      }
+      await refreshServers();
+      toast.success('Server imported successfully');
+      resetImportState();
+      setIsImportOpen(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to import server');
+    } finally {
+      setIsImportSubmitting(false);
+    }
+  };
+
+  const renderImportList = (items: string[]) => {
+    return items.length > 0 ? items.join(', ') : 'Not present.';
+  };
+
+  useEffect(() => {
+    if (!isImportOpen || !importAnalysis) return;
+    if (importAnalysis.version?.trim()) {
+      setImportVersionOptions([]);
+      setImportVersionsLoading(false);
+      return;
+    }
+    const serverType = importForm.serverType.trim();
+    if (!serverType) {
+      setImportVersionOptions([]);
+      setImportVersionsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setImportVersionsLoading(true);
+    fetch(`/api/versions/${serverType}`)
+      .then((res) => {
+        if (!res.ok) throw new Error('Failed to fetch versions');
+        return res.json() as Promise<VersionInfo[]>;
+      })
+      .then((items) => {
+        if (cancelled) return;
+        const list = Array.isArray(items) ? items : [];
+        setImportVersionOptions(list);
+        const selected = importForm.version.trim();
+        const selectedExists = selected !== '' && list.some((entry) => entry.version === selected);
+        if (!selectedExists) {
+          const latest = list.find((entry) => entry.latest)?.version || list[0]?.version || '';
+          setImportForm((prev) => ({ ...prev, version: latest }));
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setImportVersionOptions([]);
+        setImportForm((prev) => ({ ...prev, version: '' }));
+        toast.error(`Couldn’t load versions for ${serverType}.`);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setImportVersionsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isImportOpen, importAnalysis?.analysisId, importAnalysis?.version, importForm.serverType]);
+
   const handleToggleAutoStart = async (e: React.MouseEvent, serverId: string, currentValue: boolean) => {
     e.stopPropagation();
     try {
@@ -416,8 +799,23 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
   useEscapeKey(deleteConfirm, () => setDeleteConfirm(false));
   useEscapeKey(!!flagsPopup, () => setFlagsPopup(null));
   useEscapeKey(!!updatePopup, () => setUpdatePopup(null));
+  useEscapeKey(isImportOpen, () => closeImportModal());
+
+  useEffect(() => {
+    return () => {
+      if (importAnalyzeXhrRef.current) {
+        importAnalyzeXhrRef.current.abort();
+      }
+      if (importAnalysis?.analysisId) {
+        void cancelImportAnalysis(importAnalysis.analysisId);
+      }
+    };
+  }, [importAnalysis?.analysisId]);
 
   const visibleServers = servers.filter((server) => !pendingDeletedServerIds.has(server.id));
+  const showImportDropZone = isImportOpen && !importAnalysis && !isImportUploading && !isImportAnalyzing;
+  const showImportProgress = isImportOpen && !importAnalysis && (isImportUploading || isImportAnalyzing);
+  const showImportInfo = isImportOpen && !!importAnalysis;
 
   if (isCreating) {
     return (
@@ -670,6 +1068,13 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
         <h2 className="text-3xl font-bold text-white">Servers</h2>
         <div className="flex flex-wrap items-center gap-3">
           <button
+            onClick={() => setIsCreating(true)}
+            className="flex items-center gap-2 bg-[#E5B80B] text-black px-4 py-2 rounded font-bold hover:bg-[#d4a90a] transition-colors shadow-lg shadow-[#E5B80B]/20"
+          >
+            <Plus size={20} />
+            Create Server
+          </button>
+          <button
             onClick={() => setDeleteConfirm(true)}
             disabled={selectedServerIds.size === 0}
             className={clsx(
@@ -683,11 +1088,11 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
             {selectedServerIds.size > 1 ? `Delete Selected (${selectedServerIds.size})` : 'Delete Server'}
           </button>
           <button
-            onClick={() => setIsCreating(true)}
-            className="flex items-center gap-2 bg-[#E5B80B] text-black px-4 py-2 rounded font-bold hover:bg-[#d4a90a] transition-colors shadow-lg shadow-[#E5B80B]/20"
+            onClick={() => setIsImportOpen(true)}
+            className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded font-bold hover:bg-blue-500 transition-colors shadow-lg shadow-blue-900/30"
           >
-            <Plus size={20} />
-            Create Server
+            <FileUp size={20} />
+            Import Server
           </button>
         </div>
       </div>
@@ -834,7 +1239,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
                     if (server.status === 'Error') {
                       fetch(`/api/servers/${server.id}/retry-install`, { method: 'POST' })
                         .then(() => { toast.success('Retrying installation...'); refreshServers(); })
-                        .catch(() => toast.error('Retry failed'));
+                        .catch(() => toast.error('Couldn’t retry installation. Try again.'));
                     } else {
                       handleToggleStatus(e, server.id, server.status);
                     }
@@ -992,6 +1397,286 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
           ))}
         </div>
       )}
+
+      {/* Import Server Modal */}
+      <AnimatePresence>
+        {isImportOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+            onClick={closeImportModal}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.98, y: 6 }}
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+              className="bg-[#202020] border border-blue-500/40 rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-full bg-blue-900/40 text-blue-300">
+                    <Upload size={18} />
+                  </div>
+                  <h3 className="text-xl font-bold text-white">Import Server</h3>
+                </div>
+                <button onClick={closeImportModal} className="text-gray-500 hover:text-white transition-colors">
+                  <X size={18} />
+                </button>
+              </div>
+
+              <input
+                ref={importFileInputRef}
+                type="file"
+                accept=".zip,.tar.gz,.tgz,application/zip,application/gzip,application/x-gzip"
+                onChange={handleImportPicker}
+                className="hidden"
+              />
+
+              <AnimatePresence mode="wait" initial={false}>
+                {showImportDropZone && (
+                  <motion.div
+                    key="import-drop"
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    transition={{ duration: 0.2, ease: 'easeOut' }}
+                    onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setImportDragActive(true); }}
+                    onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setImportDragActive(false); }}
+                    onDrop={handleImportDrop}
+                    className={clsx(
+                      "border-2 border-dashed rounded-lg p-6 text-center transition-colors",
+                      importDragActive ? "border-blue-400 bg-blue-900/20" : "border-[#3a3a3a] bg-[#1a1a1a]"
+                    )}
+                  >
+                    <Upload size={28} className="mx-auto mb-2 text-blue-400" />
+                    <p className="text-sm text-gray-300 mb-1">Drop a .zip or .tar.gz archive here</p>
+                    <p className="text-xs text-gray-500 mb-3">or choose a file manually</p>
+                    <button
+                      onClick={() => importFileInputRef.current?.click()}
+                      className="px-4 py-2 rounded bg-blue-600 text-white font-semibold hover:bg-blue-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      disabled={isImportUploading || isImportAnalyzing || isImportSubmitting}
+                    >
+                      Choose Archive
+                    </button>
+                    {importArchiveName && (
+                      <p className="text-xs text-gray-400 mt-3 font-mono break-all">{importArchiveName}</p>
+                    )}
+                  </motion.div>
+                )}
+
+                {showImportProgress && (
+                  <motion.div
+                    key="import-progress"
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    transition={{ duration: 0.2, ease: 'easeOut' }}
+                    className="border border-blue-500/30 rounded-lg bg-[#1a1a1a] p-4"
+                  >
+                    <div className="flex items-center justify-between text-sm mb-2">
+                      <span className="text-gray-300">
+                        {isImportUploading ? 'Uploading archive...' : 'Analyzing archive...'}
+                      </span>
+                      <span className="text-blue-300 font-semibold">{importUploadProgress}%</span>
+                    </div>
+                    <div className="h-2 w-full bg-[#111] rounded overflow-hidden">
+                      <div
+                        className="h-full bg-blue-500 transition-all duration-200"
+                        style={{ width: `${Math.max(0, Math.min(100, importUploadProgress))}%` }}
+                      />
+                    </div>
+                    {importArchiveName && (
+                      <p className="text-xs text-gray-500 mt-2 break-all">{importArchiveName}</p>
+                    )}
+                    <div className="flex justify-end mt-3">
+                      <button
+                        onClick={abortImportAnalyze}
+                        className="px-3 py-1.5 rounded text-xs text-gray-300 bg-[#333] hover:bg-[#404040] transition-colors"
+                      >
+                        Cancel Upload
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+
+                {showImportInfo && importAnalysis && (
+                  <motion.div
+                    key="import-info"
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    transition={{ duration: 0.22, ease: 'easeOut' }}
+                    className="space-y-3"
+                  >
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-semibold text-white uppercase tracking-wide">Import server info</h4>
+                      <button
+                        onClick={() => importFileInputRef.current?.click()}
+                        className="text-xs px-3 py-1.5 rounded border border-blue-500/40 text-blue-300 hover:bg-blue-900/20 transition-colors"
+                        disabled={isImportUploading || isImportAnalyzing || isImportSubmitting}
+                      >
+                        Choose another archive
+                      </button>
+                    </div>
+
+                    <motion.div
+                      variants={importInfoContainerVariants}
+                      initial="hidden"
+                      animate="show"
+                      className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm"
+                    >
+                      <motion.div variants={importInfoItemVariants} className="bg-[#1a1a1a] border border-[#333] rounded p-3">
+                        <div className="text-gray-500 text-xs mb-1">Server name</div>
+                        <input
+                          value={importForm.name}
+                          onChange={(e) => setImportForm((prev) => ({ ...prev, name: e.target.value }))}
+                          className="w-full bg-[#111] border border-[#3a3a3a] rounded p-2 text-white focus:outline-none focus:border-[#E5B80B]"
+                        />
+                      </motion.div>
+                      <motion.div variants={importInfoItemVariants} className="bg-[#1a1a1a] border border-[#333] rounded p-3">
+                        <div className="text-gray-500 text-xs mb-1">Port</div>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={importForm.port}
+                          onChange={(e) => {
+                            const digits = e.target.value.replace(/[^\d]/g, '').slice(0, 5);
+                            setImportForm((prev) => ({ ...prev, port: digits }));
+                          }}
+                          className="w-full bg-[#111] border border-[#3a3a3a] rounded p-2 text-white focus:outline-none focus:border-[#E5B80B]"
+                        />
+                      </motion.div>
+                      <motion.div variants={importInfoItemVariants} className="bg-[#1a1a1a] border border-[#333] rounded p-3">
+                        <div className="text-gray-500 text-xs mb-1">Server Type</div>
+                        {importAnalysis.typeDetected ? (
+                          <div className="w-full bg-[#111] border border-[#3a3a3a] rounded p-2 text-white">
+                            {importForm.serverType}
+                          </div>
+                        ) : (
+                          <select
+                            value={importForm.serverType}
+                            onChange={(e) => setImportForm((prev) => ({ ...prev, serverType: e.target.value, version: '' }))}
+                            className="w-full bg-[#111] border border-[#3a3a3a] rounded p-2 text-white focus:outline-none focus:border-[#E5B80B]"
+                          >
+                            {SERVER_TYPES.map((type) => (
+                              <option key={type} value={type}>{type}</option>
+                            ))}
+                          </select>
+                        )}
+                      </motion.div>
+                      <motion.div variants={importInfoItemVariants} className="bg-[#1a1a1a] border border-[#333] rounded p-3">
+                        <div className="text-gray-500 text-xs mb-1">Server Version</div>
+                        {importAnalysis.version?.trim() ? (
+                          <div className="w-full bg-[#111] border border-[#3a3a3a] rounded p-2 text-white">
+                            {importAnalysis.version}
+                          </div>
+                        ) : (
+                          <select
+                            value={importForm.version}
+                            onChange={(e) => setImportForm((prev) => ({ ...prev, version: e.target.value }))}
+                            className="w-full bg-[#111] border border-[#3a3a3a] rounded p-2 text-white focus:outline-none focus:border-[#E5B80B]"
+                            disabled={importVersionsLoading || importVersionOptions.length === 0}
+                          >
+                            {importVersionsLoading && <option value="">Loading versions...</option>}
+                            {!importVersionsLoading && importVersionOptions.length === 0 && <option value="">No versions available</option>}
+                            {!importVersionsLoading && importVersionOptions.map((versionInfo) => (
+                              <option key={versionInfo.version} value={versionInfo.version}>
+                                {versionInfo.version}{versionInfo.latest ? ' (Latest)' : ''}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </motion.div>
+                      <motion.div variants={importInfoItemVariants} className="bg-[#1a1a1a] border border-[#333] rounded p-3 md:col-span-2">
+                        <div className="text-gray-500 text-xs mb-1">Worlds</div>
+                        <div className="text-white break-words">{renderImportList(importAnalysis.worlds)}</div>
+                      </motion.div>
+                      <motion.div variants={importInfoItemVariants} className="bg-[#1a1a1a] border border-[#333] rounded p-3 md:col-span-2">
+                        <div className="text-gray-500 text-xs mb-1">Plugins/Mods</div>
+                        <div className="text-white break-words">{renderImportList([...importAnalysis.plugins, ...importAnalysis.mods])}</div>
+                      </motion.div>
+                      <motion.div variants={importInfoItemVariants} className="bg-[#1a1a1a] border border-[#333] rounded p-3">
+                        <div className="text-gray-500 text-xs mb-1">Max Players</div>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={importForm.maxPlayers}
+                          onChange={(e) => {
+                            const digits = e.target.value.replace(/[^\d]/g, '').slice(0, 5);
+                            setImportForm((prev) => ({ ...prev, maxPlayers: digits }));
+                          }}
+                          placeholder="20"
+                          className="w-full bg-[#111] border border-[#3a3a3a] rounded p-2 text-white focus:outline-none focus:border-[#E5B80B]"
+                        />
+                      </motion.div>
+                      <motion.div variants={importInfoItemVariants} className="bg-[#1a1a1a] border border-[#333] rounded p-3">
+                        <div className="text-gray-500 text-xs mb-1">MOTD</div>
+                        <input
+                          value={importForm.motd}
+                          onChange={(e) => setImportForm((prev) => ({ ...prev, motd: e.target.value }))}
+                          placeholder="Not present."
+                          className="w-full bg-[#111] border border-[#3a3a3a] rounded p-2 text-white focus:outline-none focus:border-[#E5B80B]"
+                        />
+                      </motion.div>
+                      <motion.div variants={importInfoItemVariants} className="bg-[#1a1a1a] border border-[#333] rounded p-3">
+                        <div className="text-gray-500 text-xs mb-1">Whitelist</div>
+                        <select
+                          value={importForm.whiteList}
+                          onChange={(e) => setImportForm((prev) => ({ ...prev, whiteList: e.target.value as ImportBoolState }))}
+                          className="w-full bg-[#111] border border-[#3a3a3a] rounded p-2 text-white focus:outline-none focus:border-[#E5B80B]"
+                        >
+                          <option value="true">On</option>
+                          <option value="false">Off</option>
+                        </select>
+                      </motion.div>
+                      <motion.div variants={importInfoItemVariants} className="bg-[#1a1a1a] border border-[#333] rounded p-3">
+                        <div className="text-gray-500 text-xs mb-1">Online Mode</div>
+                        <select
+                          value={importForm.onlineMode}
+                          onChange={(e) => setImportForm((prev) => ({ ...prev, onlineMode: e.target.value as ImportBoolState }))}
+                          className="w-full bg-[#111] border border-[#3a3a3a] rounded p-2 text-white focus:outline-none focus:border-[#E5B80B]"
+                        >
+                          <option value="true">On</option>
+                          <option value="false">Off</option>
+                        </select>
+                      </motion.div>
+                    </motion.div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <div className="flex justify-end gap-3 mt-6">
+                <button
+                  onClick={closeImportModal}
+                  className="px-4 py-2 rounded text-gray-300 bg-[#333] hover:bg-[#404040] transition-colors"
+                  disabled={isImportSubmitting}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleCommitImport}
+                  disabled={
+                    !importAnalysis ||
+                    isImportUploading ||
+                    isImportAnalyzing ||
+                    isImportSubmitting ||
+                    (!importAnalysis.typeDetected && !importForm.serverType.trim()) ||
+                    (!importAnalysis.version?.trim() && (importVersionsLoading || !importForm.version.trim()))
+                  }
+                  className="px-4 py-2 rounded font-bold bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+                >
+                  {isImportSubmitting ? <Loader2 size={16} className="animate-spin" /> : <FileUp size={16} />}
+                  {isImportSubmitting ? 'Importing...' : 'Import'}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Delete Confirmation Popup */}
       {deleteConfirm && (() => {
