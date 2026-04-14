@@ -69,6 +69,7 @@ go build -o orexa-panel .
 
 - Multi-server lifecycle control: start, stop, kill, safe start, and delete.
 - Supported server types: Vanilla, Paper, Spigot, Purpur, Folia, Fabric, Forge, NeoForge, and Velocity.
+- Import existing servers from `.zip` or `.tar.gz` archives with analyze/confirm flow and editable pre-import metadata.
 - Clone servers with per-section options (worlds, plugins/mods, configs).
 - Scheduled restart and scheduled stop.
 - Auto-start toggle and retry install support.
@@ -132,6 +133,7 @@ Orexa works with defaults. If you need extra control, use environment variables:
 | `ADPANEL_TRUSTED_PROXIES` | unset | Comma-separated trusted CIDRs/IPs for forwarded header handling. |
 | `ADPANEL_CSRF_MODE` | `enforce` | CSRF policy for unsafe authenticated API methods (`enforce`, `report`, `off`). |
 | `ADPANEL_MAX_UPLOAD_BYTES` | `268435456` | Max request size for file browser and plugin/mod uploads (256 MB). |
+| `ADPANEL_MAX_SERVER_IMPORT_BYTES` | `8589934592` | Max request size for server import archive uploads (8 GB). |
 | `ADPANEL_PLUGIN_UPDATE_ALLOWED_HOSTS` | unset | Extra allowed hosts/domains for plugin/mod update downloads. |
 | `ADPANEL_MAX_PLUGIN_UPDATE_BYTES` | `268435456` | Max download size for plugin/mod update fetches (256 MB). |
 | `ADPANEL_USER_AGENT` | unset | Optional global User-Agent override for upstream fetches. |
@@ -211,6 +213,9 @@ Auth gate and security error codes used by protected routes include:
 | `PUT` | `/api/servers/{id}/flags` |
 | `GET` | `/api/servers/{id}/status` |
 | `POST` | `/api/servers/clone` |
+| `POST` | `/api/servers/import/analyze` |
+| `POST` | `/api/servers/import/commit` |
+| `DELETE` | `/api/servers/import/analyze/{id}` |
 
 ### Versions
 
@@ -297,4 +302,4 @@ Default runtime paths under `ADPANEL_DIR` (default `/AdPanel`):
 
 MIT License.
 
-Copyright 2026 Pablo Barrera
+Copyright 2026 Pbarrera813
