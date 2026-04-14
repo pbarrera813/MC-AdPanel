@@ -7,6 +7,42 @@ import (
 	"testing"
 )
 
+func TestUploadMaxBytesFromEnv(t *testing.T) {
+	t.Setenv("ADPANEL_MAX_UPLOAD_BYTES", "")
+	if got := uploadMaxBytesFromEnv(); got != defaultMaxUploadBytes {
+		t.Fatalf("expected default upload cap %d, got %d", defaultMaxUploadBytes, got)
+	}
+
+	t.Setenv("ADPANEL_MAX_UPLOAD_BYTES", "536870912")
+	if got := uploadMaxBytesFromEnv(); got != 536870912 {
+		t.Fatalf("expected configured upload cap, got %d", got)
+	}
+}
+
+func TestServerImportMaxBytesFromEnv(t *testing.T) {
+	t.Setenv("ADPANEL_MAX_SERVER_IMPORT_BYTES", "")
+	if got := serverImportMaxBytesFromEnv(); got != defaultMaxServerImportBytes {
+		t.Fatalf("expected default import cap %d, got %d", defaultMaxServerImportBytes, got)
+	}
+
+	t.Setenv("ADPANEL_MAX_SERVER_IMPORT_BYTES", "4294967296")
+	if got := serverImportMaxBytesFromEnv(); got != 4294967296 {
+		t.Fatalf("expected configured import cap, got %d", got)
+	}
+}
+
+func TestServerImportMaxBytesFromEnvFallsBackOnInvalid(t *testing.T) {
+	t.Setenv("ADPANEL_MAX_SERVER_IMPORT_BYTES", "0")
+	if got := serverImportMaxBytesFromEnv(); got != defaultMaxServerImportBytes {
+		t.Fatalf("expected default import cap on invalid value, got %d", got)
+	}
+
+	t.Setenv("ADPANEL_MAX_SERVER_IMPORT_BYTES", "invalid")
+	if got := serverImportMaxBytesFromEnv(); got != defaultMaxServerImportBytes {
+		t.Fatalf("expected default import cap on parse error, got %d", got)
+	}
+}
+
 func TestTrustedProxySet(t *testing.T) {
 	set := parseTrustedProxySet("10.0.0.0/8, 127.0.0.1")
 	if !set.isTrusted("10.1.2.3:1234") {
