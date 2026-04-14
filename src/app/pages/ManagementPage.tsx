@@ -430,12 +430,12 @@ export const ManagementPage = () => {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to save settings');
+        throw new Error(data.error || 'Couldn’t save settings. Try again.');
       }
       toast.success('Settings saved successfully');
       await refreshServers();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save settings');
+      toast.error(err instanceof Error ? err.message : 'Couldn’t save settings. Try again.');
     } finally {
       setSavingSettings(false);
     }
