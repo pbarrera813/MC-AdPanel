@@ -3,6 +3,7 @@ import { Server, Player } from '../../context/ServerContext';
 import { UserX, Ban, Skull, Search, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import clsx from 'clsx';
+import { motion } from 'motion/react';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip';
 
 interface PlayerListProps {
@@ -107,6 +108,7 @@ export const PlayerList = ({ server }: PlayerListProps) => {
   const filteredPlayers = players.filter(p =>
     p.name.toLowerCase().includes(filter.toLowerCase())
   );
+  const animateRows = filteredPlayers.length <= 40;
 
   const handleAction = async (playerName: string, action: 'kick' | 'ban' | 'kill') => {
     try {
@@ -154,7 +156,12 @@ export const PlayerList = ({ server }: PlayerListProps) => {
       : 'Unable to show ping, install pingplayer plugin in order to be able to see player\'s ping';
 
   return (
-    <div className="flex flex-col h-full bg-[#1e1e1d] p-4 md:p-6">
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2, ease: 'easeOut' }}
+      className="flex flex-col h-full bg-[#1e1e1d] p-4 md:p-6"
+    >
       <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-6">
         <div className="relative w-full md:w-64">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
@@ -204,8 +211,14 @@ export const PlayerList = ({ server }: PlayerListProps) => {
               </tr>
             </thead>
             <tbody className="divide-y divide-[#2a2a29]">
-              {filteredPlayers.map(player => (
-                <tr key={player.name} className="hover:bg-[#252524] transition-colors group">
+              {filteredPlayers.map((player, index) => (
+                <motion.tr
+                  key={player.name}
+                  initial={animateRows ? { opacity: 0, y: 3 } : false}
+                  animate={animateRows ? { opacity: 1, y: 0 } : false}
+                  transition={animateRows ? { duration: 0.16, delay: Math.min(index, 12) * 0.012, ease: 'easeOut' } : undefined}
+                  className="hover:bg-[#252524] transition-colors group"
+                >
                   <td className="px-4 py-3 text-white flex items-center gap-3">
                     <img
                       src={`https://mc-heads.net/avatar/${player.name}/32`}
@@ -250,7 +263,7 @@ export const PlayerList = ({ server }: PlayerListProps) => {
                       <ActionBtn icon={Skull} label="Kill" color="hover:bg-gray-700 hover:text-gray-300" onClick={() => handleAction(player.name, 'kill')} />
                     </div>
                   </td>
-                </tr>
+                </motion.tr>
               ))}
             </tbody>
           </table>
@@ -266,7 +279,7 @@ export const PlayerList = ({ server }: PlayerListProps) => {
           )}
         </div>
       )}
-    </div>
+    </motion.div>
   );
 };
 
