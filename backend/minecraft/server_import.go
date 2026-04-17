@@ -153,7 +153,7 @@ func sanitizeArchiveEntryPath(name string) (string, error) {
 		return "", nil
 	}
 	if strings.ContainsRune(normalized, '\x00') {
-		return "", fmt.Errorf("archive contains invalid path")
+		return "", fmt.Errorf("file contains invalid path")
 	}
 	for strings.HasPrefix(normalized, "./") {
 		normalized = strings.TrimPrefix(normalized, "./")
@@ -163,10 +163,10 @@ func sanitizeArchiveEntryPath(name string) (string, error) {
 		return "", nil
 	}
 	if cleaned == ".." || strings.HasPrefix(cleaned, "../") || strings.HasPrefix(cleaned, "/") {
-		return "", fmt.Errorf("archive contains unsafe path %q", name)
+		return "", fmt.Errorf("file contains unsafe path %q", name)
 	}
 	if len(cleaned) >= 2 && cleaned[1] == ':' {
-		return "", fmt.Errorf("archive contains unsafe path %q", name)
+		return "", fmt.Errorf("file contains unsafe path %q", name)
 	}
 	return cleaned, nil
 }
@@ -209,12 +209,12 @@ func extractZipArchive(archivePath, destDir string) error {
 			return err
 		}
 		if err := ensurePathWithinBase(baseAbs, targetAbs); err != nil {
-			return fmt.Errorf("archive entry escapes extraction root")
+			return fmt.Errorf("file entry escapes extraction root")
 		}
 
 		mode := f.Mode()
 		if mode&os.ModeSymlink != 0 {
-			return fmt.Errorf("archive symlinks are not supported")
+			return fmt.Errorf("file symlinks are not supported")
 		}
 		if f.FileInfo().IsDir() {
 			if err := os.MkdirAll(targetAbs, 0755); err != nil {
@@ -283,7 +283,7 @@ func extractTarGzArchive(archivePath, destDir string) error {
 			return err
 		}
 		if err := ensurePathWithinBase(baseAbs, targetAbs); err != nil {
-			return fmt.Errorf("archive entry escapes extraction root")
+			return fmt.Errorf("file entry escapes extraction root")
 		}
 
 		switch header.Typeflag {
@@ -300,7 +300,7 @@ func extractTarGzArchive(archivePath, destDir string) error {
 				return err
 			}
 		case tar.TypeSymlink, tar.TypeLink:
-			return fmt.Errorf("archive links are not supported")
+			return fmt.Errorf("file links are not supported")
 		default:
 			// Ignore other entry kinds.
 		}
@@ -1054,7 +1054,7 @@ func (m *Manager) cleanupExpiredImportAnalyses() {
 
 func (m *Manager) AnalyzeServerImportArchive(fileName string, src io.Reader) (*ServerImportAnalysisResult, error) {
 	if src == nil {
-		return nil, fmt.Errorf("no archive data provided")
+		return nil, fmt.Errorf("no file data provided")
 	}
 	trimmedName := strings.TrimSpace(fileName)
 	lowerName := strings.ToLower(trimmedName)
@@ -1065,7 +1065,7 @@ func (m *Manager) AnalyzeServerImportArchive(fileName string, src io.Reader) (*S
 	case strings.HasSuffix(lowerName, ".tar.gz"), strings.HasSuffix(lowerName, ".tgz"):
 		archiveType = "tar.gz"
 	default:
-		return nil, fmt.Errorf("unsupported archive format, use .zip or .tar.gz")
+		return nil, fmt.Errorf("unsupported file format, use .zip or .tar.gz")
 	}
 
 	analysisID := strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
@@ -1089,33 +1089,33 @@ func (m *Manager) AnalyzeServerImportArchive(fileName string, src io.Reader) (*S
 
 	archiveFile, err := os.OpenFile(archivePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create temporary archive file: %w", err)
+		return nil, fmt.Errorf("failed to create temporary file: %w", err)
 	}
 	if _, err := io.Copy(archiveFile, src); err != nil {
 		_ = archiveFile.Close()
-		return nil, fmt.Errorf("failed to store uploaded archive: %w", err)
+		return nil, fmt.Errorf("failed to store uploaded file: %w", err)
 	}
 	if err := archiveFile.Close(); err != nil {
-		return nil, fmt.Errorf("failed to finalize uploaded archive: %w", err)
+		return nil, fmt.Errorf("failed to finalize uploaded file: %w", err)
 	}
 
 	switch archiveType {
 	case "zip":
 		if err := extractZipArchive(archivePath, extractDir); err != nil {
-			return nil, fmt.Errorf("failed to extract zip archive: %w", err)
+			return nil, fmt.Errorf("failed to extract zip file: %w", err)
 		}
 	default:
 		if err := extractTarGzArchive(archivePath, extractDir); err != nil {
-			return nil, fmt.Errorf("failed to extract tar.gz archive: %w", err)
+			return nil, fmt.Errorf("failed to extract tar.gz file: %w", err)
 		}
 	}
 
 	rootDir, topLevelName, err := normalizeExtractedImportRoot(extractDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to inspect extracted archive: %w", err)
+		return nil, fmt.Errorf("failed to inspect extracted file contents: %w", err)
 	}
 	if _, err := os.Stat(rootDir); err != nil {
-		return nil, fmt.Errorf("archive appears empty")
+		return nil, fmt.Errorf("file appears empty")
 	}
 
 	plugins := listJarNames(filepath.Join(rootDir, "plugins"))
@@ -1222,7 +1222,7 @@ func (m *Manager) CommitServerImport(analysisID string, opts ServerImportCommitO
 		delete(m.importAnalyses, id)
 		m.mu.Unlock()
 		_ = os.RemoveAll(analysis.WorkingDir)
-		return nil, fmt.Errorf("import analysis expired, upload the archive again")
+		return nil, fmt.Errorf("import analysis expired, upload the file again")
 	}
 
 	serverType := canonicalServerType(opts.TypeOverride)

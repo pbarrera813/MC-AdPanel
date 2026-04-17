@@ -115,7 +115,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
   const [isImportSubmitting, setIsImportSubmitting] = useState(false);
   const [importUploadProgress, setImportUploadProgress] = useState(0);
   const [importAnalysis, setImportAnalysis] = useState<ImportAnalysis | null>(null);
-  const [importArchiveName, setImportArchiveName] = useState('');
+  const [importFileName, setImportFileName] = useState('');
   const [importForm, setImportForm] = useState<ImportFormState>({
     name: '',
     port: '',
@@ -515,7 +515,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
     setImportDragActive(false);
     setIsImportSubmitting(false);
     setImportAnalysis(null);
-    setImportArchiveName('');
+    setImportFileName('');
     setImportForm({
       name: '',
       port: '',
@@ -540,11 +540,11 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
     void cancelImportAnalysis(analysisId);
   };
 
-  const analyzeImportArchive = async (file: File | null) => {
+  const analyzeImportFile = async (file: File | null) => {
     if (!file) return;
     const previousAnalysisId = importAnalysis?.analysisId;
     resetImportState();
-    setImportArchiveName(file.name);
+    setImportFileName(file.name);
     setIsImportUploading(true);
     setImportUploadProgress(0);
 
@@ -629,12 +629,12 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
     e.stopPropagation();
     setImportDragActive(false);
     const file = e.dataTransfer.files?.[0] || null;
-    await analyzeImportArchive(file);
+    await analyzeImportFile(file);
   };
 
   const handleImportPicker = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] || null;
-    await analyzeImportArchive(file);
+    await analyzeImportFile(file);
     e.target.value = '';
   };
 
@@ -1453,17 +1453,17 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
                     )}
                   >
                     <Upload size={28} className="mx-auto mb-2 text-blue-400" />
-                    <p className="text-sm text-gray-300 mb-1">Drop a .zip or .tar.gz archive here</p>
-                    <p className="text-xs text-gray-500 mb-3">or choose a file manually</p>
+                    <p className="text-sm text-gray-300 mb-1">Drop a .zip or .tar.gz file here</p>
+                    <p className="text-xs text-gray-500 mb-3">or choose manually</p>
                     <button
                       onClick={() => importFileInputRef.current?.click()}
                       className="px-4 py-2 rounded bg-blue-600 text-white font-semibold hover:bg-blue-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       disabled={isImportUploading || isImportAnalyzing || isImportSubmitting}
                     >
-                      Choose Archive
+                      Choose File
                     </button>
-                    {importArchiveName && (
-                      <p className="text-xs text-gray-400 mt-3 font-mono break-all">{importArchiveName}</p>
+                    {importFileName && (
+                      <p className="text-xs text-gray-400 mt-3 font-mono break-all">{importFileName}</p>
                     )}
                   </motion.div>
                 )}
@@ -1479,7 +1479,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
                   >
                     <div className="flex items-center justify-between text-sm mb-2">
                       <span className="text-gray-300">
-                        {isImportUploading ? 'Uploading archive...' : 'Analyzing archive...'}
+                        {isImportUploading ? 'Uploading file...' : 'Analyzing file...'}
                       </span>
                       <span className="text-blue-300 font-semibold">{importUploadProgress}%</span>
                     </div>
@@ -1489,8 +1489,8 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
                         style={{ width: `${Math.max(0, Math.min(100, importUploadProgress))}%` }}
                       />
                     </div>
-                    {importArchiveName && (
-                      <p className="text-xs text-gray-500 mt-2 break-all">{importArchiveName}</p>
+                    {importFileName && (
+                      <p className="text-xs text-gray-500 mt-2 break-all">{importFileName}</p>
                     )}
                     <div className="flex justify-end mt-3">
                       <button
@@ -1519,7 +1519,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
                         className="text-xs px-3 py-1.5 rounded border border-blue-500/40 text-blue-300 hover:bg-blue-900/20 transition-colors"
                         disabled={isImportUploading || isImportAnalyzing || isImportSubmitting}
                       >
-                        Choose another archive
+                        Choose another file
                       </button>
                     </div>
 

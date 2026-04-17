@@ -37,6 +37,7 @@ func main() {
 
 	log.Printf("Base directory: %s", baseDir)
 	log.Printf("Static files: %s", distDir)
+	logFrontendBundleFingerprint(distDir)
 	log.Printf("Running startup self-checks...")
 	if err := runStartupChecks(baseDir, distDir); err != nil {
 		log.Fatalf("Startup self-check failed: %v", err)
@@ -255,6 +256,41 @@ func parseAllowedOrigins(raw string) map[string]struct{} {
 		out[origin] = struct{}{}
 	}
 	return out
+}
+
+func logFrontendBundleFingerprint(distDir string) {
+	assetsDir := filepath.Join(distDir, "assets")
+	entries, err := os.ReadDir(assetsDir)
+	if err != nil {
+		log.Printf("Frontend bundle: unavailable (%v)", err)
+		return
+	}
+
+	var newestName string
+	var newestModTime time.Time
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, "index-") || !strings.HasSuffix(name, ".js") {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			continue
+		}
+		if newestName == "" || info.ModTime().After(newestModTime) {
+			newestName = name
+			newestModTime = info.ModTime()
+		}
+	}
+
+	if newestName == "" {
+		log.Printf("Frontend bundle: no index-*.js file found in %s", assetsDir)
+		return
+	}
+	log.Printf("Frontend bundle: %s", newestName)
 }
 
 func runStartupChecks(baseDir, distDir string) error {
