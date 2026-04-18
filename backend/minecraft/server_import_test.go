@@ -163,6 +163,61 @@ func TestServerImportRejectsUnsupportedArchive(t *testing.T) {
 	}
 }
 
+func TestServerImportRejectsNonServerPayload(t *testing.T) {
+	base := t.TempDir()
+	mgr, err := NewManager(base)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer mgr.StopAll()
+
+	zipBytes := buildZipArchive(t, map[string]string{
+		"NotServer/server.properties": "server-port=25565\nmax-players=20\n",
+		"NotServer/world/level.dat":   "world-data",
+		"NotServer/readme.txt":        "not a server package",
+	})
+	_, err = mgr.AnalyzeServerImportArchive("notserver.zip", bytes.NewReader(zipBytes))
+	if err == nil {
+		t.Fatalf("expected non-server payload rejection")
+	}
+	want := "The uploaded file couldn't be confirmed to be a server, are you sure you uploaded the right file?"
+	if err.Error() != want {
+		t.Fatalf("expected exact message %q, got %q", want, err.Error())
+	}
+}
+
+func TestServerImportAcceptsCustomRootJarName(t *testing.T) {
+	base := t.TempDir()
+	mgr, err := NewManager(base)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer mgr.StopAll()
+
+	zipBytes := buildZipArchive(t, map[string]string{
+		"CustomJar/paperclip-1.21.10.jar": "jar-bytes",
+		"CustomJar/spigot.yml":            "settings: {}\n",
+		"CustomJar/logs/latest.log":       "[bootstrap] Loading Paper 1.21.10-130-ver/1.21.10@8043efd for Minecraft 1.21.10\n",
+	})
+	result, err := mgr.AnalyzeServerImportArchive("customjar.zip", bytes.NewReader(zipBytes))
+	if err != nil {
+		t.Fatalf("AnalyzeServerImportArchive failed: %v", err)
+	}
+	info, err := mgr.CommitServerImport(result.AnalysisID, ServerImportCommitOptions{})
+	if err != nil {
+		t.Fatalf("CommitServerImport failed: %v", err)
+	}
+	mgr.mu.Lock()
+	cfg := mgr.configs[info.ID]
+	mgr.mu.Unlock()
+	if cfg == nil {
+		t.Fatalf("expected imported config to exist")
+	}
+	if cfg.JarFile != "paperclip-1.21.10.jar" {
+		t.Fatalf("expected custom jar to be selected, got %q", cfg.JarFile)
+	}
+}
+
 func TestServerImportUnknownTypeRequiresOverride(t *testing.T) {
 	base := t.TempDir()
 	mgr, err := NewManager(base)
@@ -172,7 +227,8 @@ func TestServerImportUnknownTypeRequiresOverride(t *testing.T) {
 	defer mgr.StopAll()
 
 	zipBytes := buildZipArchive(t, map[string]string{
-		"Mystery/readme.txt": "hello",
+		"Mystery/launcher-custom.jar": "jar",
+		"Mystery/readme.txt":          "hello",
 	})
 	result, err := mgr.AnalyzeServerImportArchive("mystery.zip", bytes.NewReader(zipBytes))
 	if err != nil {
@@ -208,8 +264,9 @@ func TestServerImportAnalyzeTarGz(t *testing.T) {
 	defer mgr.StopAll()
 
 	archive := buildTarGzArchive(t, map[string]string{
-		"Proxy/velocity.toml":     "bind = \"0.0.0.0:25570\"\nshow-max-players = 77\n",
-		"Proxy/forwarding.secret": "abc",
+		"Proxy/velocity.toml":      "bind = \"0.0.0.0:25570\"\nshow-max-players = 77\n",
+		"Proxy/velocity-3.3.0.jar": "jar",
+		"Proxy/forwarding.secret":  "abc",
 	})
 	result, err := mgr.AnalyzeServerImportArchive("proxy.tar.gz", bytes.NewReader(archive))
 	if err != nil {
@@ -239,6 +296,7 @@ func TestServerImportPrefersPaperWhenPaperConfigExists(t *testing.T) {
 		"PaperLike/spigot.yml":                      "settings: {}\n",
 		"PaperLike/config/paper-global.yml":         "verbose: false\n",
 		"PaperLike/config/paper-world-defaults.yml": "world-settings: {}\n",
+		"PaperLike/paper-1.21.10.jar":               "jar",
 	})
 
 	result, err := mgr.AnalyzeServerImportArchive("paperlike.zip", bytes.NewReader(zipBytes))
@@ -248,6 +306,48 @@ func TestServerImportPrefersPaperWhenPaperConfigExists(t *testing.T) {
 	if !result.TypeDetected || result.ServerType != "Paper" {
 		t.Fatalf("expected Paper detection, got type=%q detected=%v", result.ServerType, result.TypeDetected)
 	}
+}
+
+func TestServerImportAcceptsForgeRunScriptEvidence(t *testing.T) {
+	base := t.TempDir()
+	mgr, err := NewManager(base)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer mgr.StopAll()
+
+	zipBytes := buildZipArchive(t, map[string]string{
+		"ForgePack/run.sh":                             "#!/bin/bash\njava @user_jvm_args.txt @libraries/net/minecraftforge/forge/args.txt nogui\n",
+		"ForgePack/user_jvm_args.txt":                  "-Xmx2G\n",
+		"ForgePack/libraries/net/minecraftforge/.keep": "x",
+	})
+	result, err := mgr.AnalyzeServerImportArchive("forgepack.zip", bytes.NewReader(zipBytes))
+	if err != nil {
+		t.Fatalf("AnalyzeServerImportArchive failed: %v", err)
+	}
+	if result.TypeDetected {
+		t.Fatalf("expected unknown type without explicit forge metadata, got %q", result.ServerType)
+	}
+
+	withStubProvider(t, "forge", []VersionInfo{{Version: "1.21.10", Latest: true}}, func() {
+		version := "1.21.10"
+		info, commitErr := mgr.CommitServerImport(result.AnalysisID, ServerImportCommitOptions{
+			TypeOverride: "Forge",
+			Version:      &version,
+		})
+		if commitErr != nil {
+			t.Fatalf("CommitServerImport failed: %v", commitErr)
+		}
+		mgr.mu.Lock()
+		cfg := mgr.configs[info.ID]
+		mgr.mu.Unlock()
+		if cfg == nil {
+			t.Fatalf("expected imported config")
+		}
+		if len(cfg.StartCommand) != 3 || cfg.StartCommand[0] != "bash" || cfg.StartCommand[1] != "run.sh" || cfg.StartCommand[2] != "nogui" {
+			t.Fatalf("expected run.sh start command for forge import, got %#v", cfg.StartCommand)
+		}
+	})
 }
 
 func TestServerImportDetectsVersionFromLatestLog(t *testing.T) {

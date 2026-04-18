@@ -638,6 +638,50 @@ func hasZipEntry(jarPath string, entries ...string) bool {
 	return false
 }
 
+func hasRootJarFile(rootDir string) bool {
+	entries, err := os.ReadDir(rootDir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := strings.ToLower(entry.Name())
+		if strings.HasSuffix(name, ".jar") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasForgeNeoForgeLauncherEvidence(rootDir string) bool {
+	for _, scriptName := range []string{"run.sh", "run.bat", "start.sh", "start.bat"} {
+		scriptPath := filepath.Join(rootDir, scriptName)
+		data, err := os.ReadFile(scriptPath)
+		if err != nil {
+			continue
+		}
+		lower := strings.ToLower(string(data))
+		if strings.Contains(lower, "neoforge") || strings.Contains(lower, "forge") {
+			return true
+		}
+	}
+	if hasAnyFile(rootDir, "unix_args.txt", "win_args.txt", "user_jvm_args.txt") {
+		if _, err := os.Stat(filepath.Join(rootDir, "libraries", "net", "minecraftforge")); err == nil {
+			return true
+		}
+		if _, err := os.Stat(filepath.Join(rootDir, "libraries", "net", "neoforged")); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func hasImportRuntimeSignal(rootDir string) bool {
+	return hasRootJarFile(rootDir) || hasForgeNeoForgeLauncherEvidence(rootDir)
+}
+
 func detectServerType(rootDir string, plugins, mods []string) (string, bool) {
 	velocityPath := filepath.Join(rootDir, "velocity.toml")
 	if _, err := os.Stat(velocityPath); err == nil {
@@ -719,9 +763,6 @@ func detectServerType(rootDir string, plugins, mods []string) (string, bool) {
 		}
 	}
 
-	if _, err := os.Stat(filepath.Join(rootDir, "server.properties")); err == nil {
-		return "Vanilla", true
-	}
 	return "", false
 }
 
@@ -1120,6 +1161,9 @@ func (m *Manager) AnalyzeServerImportArchive(fileName string, src io.Reader) (*S
 
 	plugins := listJarNames(filepath.Join(rootDir, "plugins"))
 	mods := listJarNames(filepath.Join(rootDir, "mods"))
+	if !hasImportRuntimeSignal(rootDir) {
+		return nil, fmt.Errorf("The uploaded file couldn't be confirmed to be a server, are you sure you uploaded the right file?")
+	}
 	worlds := detectWorldDirectories(rootDir)
 	serverProps := parseServerPropertiesFile(filepath.Join(rootDir, "server.properties"))
 	velocityPath := filepath.Join(rootDir, "velocity.toml")
