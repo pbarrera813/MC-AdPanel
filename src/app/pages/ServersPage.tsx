@@ -1105,7 +1105,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
       ) : visibleServers.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-64 text-gray-500">
           <p className="text-lg mb-2">No servers yet</p>
-          <p className="text-sm">Click "Create Server" to get started</p>
+          <p className="text-sm">Click "Create Server" or "Import Server" to get started.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

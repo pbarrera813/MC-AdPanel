@@ -478,7 +478,7 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
                   />
                 </div>
               </div>
-              <p className="text-xs text-gray-500 mt-2">Default RAM allocation for new servers. Saves time when creating many servers.</p>
+              <p className="text-xs text-gray-500 mt-2">Default RAM allocation for new servers.</p>
 
               <hr className="border-[#3a3a3a] my-6" />
               <label className="block text-sm text-gray-400 mb-3">Default JVM Flags Preset</label>
@@ -506,7 +506,7 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
                   </button>
                 ))}
               </div>
-              <p className="text-xs text-gray-500 mt-2">Pre-selected JVM flag preset when creating new servers.</p>
+              <p className="text-xs text-gray-500 mt-2">Pre-selected JVM flag preset when creating servers.</p>
 
               <hr className="border-[#3a3a3a] my-6" />
               <label className="block text-sm text-gray-400 mb-2">Status Polling Interval (seconds)</label>
@@ -519,7 +519,7 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
                 className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B] max-w-[200px]"
                 disabled={saving}
               />
-              <p className="text-xs text-gray-500 mt-2">How often the panel polls for server status updates (1-30 seconds). Lower values = more responsive, higher values = less network traffic.</p>
+              <p className="text-xs text-gray-500 mt-2">How often the panel polls for server status updates (1-30 seconds). Lower values = more responsive.</p>
 
               <hr className="border-[#3a3a3a] my-6" />
               <label className="block text-sm text-gray-400 mb-3">Live Data Polling (seconds)</label>
@@ -561,7 +561,7 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
                   />
                 </div>
               </div>
-              <p className="text-xs text-gray-500 mt-2">Hybrid model: event-driven parsing stays active, these intervals control fallback polling for TPS, players and ping consistency.</p>
+              <p className="text-xs text-gray-500 mt-2">How often will these values be updated (seconds).</p>
 
               <div className="flex justify-end mt-8">
                 <button
