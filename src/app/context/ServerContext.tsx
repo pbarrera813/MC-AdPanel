@@ -76,6 +76,7 @@ interface ServerContextType {
   addServer: (server: Omit<Server, 'id' | 'cpu' | 'ram' | 'status' | 'autoStart' | 'installError'>) => Promise<void>;
   startServer: (id: string) => Promise<void>;
   stopServer: (id: string) => Promise<void>;
+  reorderServers: (orderedIds: string[]) => Promise<void>;
   refreshServers: () => Promise<void>;
   loading: boolean;
   error: string | null;
@@ -111,8 +112,7 @@ export const ServerProvider = ({ children }: { children: ReactNode }) => {
       const res = await fetch(`${API_BASE}/api/servers`);
       if (!res.ok) throw new Error('Failed to fetch servers');
       const data: Server[] = await res.json();
-      const sorted = [...data].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
-      setServers(sorted);
+      setServers(data);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
@@ -162,10 +162,31 @@ export const ServerProvider = ({ children }: { children: ReactNode }) => {
     await refreshServers();
   };
 
+  const reorderServers = async (orderedIds: string[]) => {
+    const normalized = orderedIds.map((id) => id.trim()).filter(Boolean);
+    setServers((prev) => {
+      const byId = new Map(prev.map((server) => [server.id, server]));
+      const ordered = normalized.map((id) => byId.get(id)).filter((server): server is Server => !!server);
+      const missing = prev.filter((server) => !normalized.includes(server.id));
+      return [...ordered, ...missing];
+    });
+
+    const res = await fetch(`${API_BASE}/api/servers/order`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderedIds: normalized }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      await refreshServers();
+      throw new Error(data.error || 'Failed to save server order');
+    }
+  };
+
   return (
     <ServerContext.Provider value={{
       servers, activeServerId, setActiveServerId, activeServer,
-      addServer, startServer, stopServer, refreshServers,
+      addServer, startServer, stopServer, reorderServers, refreshServers,
       loading, error,
     }}>
       {children}

@@ -1,7 +1,22 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useServer } from '../context/ServerContext';
-import { Plus, Cpu, HardDrive, Play, Square, AlertTriangle, ArrowLeft, Check, ChevronDown, ChevronUp, Loader2, RotateCw, Power, Settings2, X, Trash2, FileUp, Upload } from 'lucide-react';
+import { Plus, Cpu, HardDrive, Play, Square, AlertTriangle, ArrowLeft, Check, ChevronDown, ChevronUp, ChevronRight, Loader2, RotateCw, Power, Settings2, X, Trash2, FileUp, Upload } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
+import {
+  DndContext,
+  DragOverlay,
+  MouseSensor,
+  TouchSensor,
+  closestCenter,
+  type DragStartEvent,
+  type DragOverEvent,
+  type DragEndEvent,
+  type DragCancelEvent,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import { SortableContext, rectSortingStrategy, arrayMove, useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { toast } from 'sonner';
 import clsx from 'clsx';
 import { useEscapeKey } from '../hooks/useEscapeKey';
@@ -93,8 +108,75 @@ const importInfoItemVariants = {
   show: { opacity: 1, y: 0, transition: { duration: 0.18, ease: 'easeOut' } },
 };
 
+const LONG_PRESS_DRAG_MS = 450;
+const DRAG_CLICK_GUARD_MS = 450;
+
+type ContextMenuState = {
+  serverId: string;
+  x: number;
+  y: number;
+  showFlagsSubmenu: boolean;
+};
+
+interface SortableServerCardProps {
+  id: string;
+  canDrag: boolean;
+  className: string;
+  onClick: () => void;
+  onDoubleClick: () => void;
+  onContextMenu: (e: React.MouseEvent<HTMLDivElement>) => void;
+  onNodeRef?: (node: HTMLDivElement | null) => void;
+  children: React.ReactNode;
+}
+
+const SortableServerCard = ({
+  id,
+  canDrag,
+  className,
+  onClick,
+  onDoubleClick,
+  onContextMenu,
+  onNodeRef,
+  children,
+}: SortableServerCardProps) => {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id,
+    disabled: !canDrag,
+  });
+
+  const combinedRef = (node: HTMLDivElement | null) => {
+    setNodeRef(node);
+    onNodeRef?.(node);
+  };
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition: transition ?? 'transform 140ms ease-out',
+    touchAction: 'pan-y',
+    willChange: 'transform',
+  };
+
+  return (
+    <motion.div
+      ref={combinedRef}
+      {...(canDrag ? attributes : {})}
+      {...(canDrag ? listeners : {})}
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ type: 'tween', duration: 0.14, ease: 'easeOut' }}
+      className={clsx(className, isDragging && 'opacity-30')}
+      style={style}
+      onClick={onClick}
+      onDoubleClick={onDoubleClick}
+      onContextMenu={onContextMenu}
+    >
+      {children}
+    </motion.div>
+  );
+};
+
 export const ServersPage = ({ onViewChange }: ServersPageProps) => {
-  const { servers, setActiveServerId, startServer, stopServer, addServer, refreshServers, loading } = useServer();
+  const { servers, setActiveServerId, startServer, stopServer, addServer, reorderServers, refreshServers, loading } = useServer();
   const [isCreating, setIsCreating] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formDefaults, setFormDefaults] = useState({
@@ -219,6 +301,10 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
   };
 
   const handleSelectServer = (id: string) => {
+    if (Date.now() < suppressNextClickUntilRef.current) {
+      return;
+    }
+    setContextMenu(null);
     // If rename handler consumed this click, skip toggling
     if (renameClickedRef.current) {
       renameClickedRef.current = false;
@@ -329,11 +415,155 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
   const [selectedServerIds, setSelectedServerIds] = useState<Set<string>>(new Set());
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [pendingDeletedServerIds, setPendingDeletedServerIds] = useState<Set<string>>(new Set());
+  const [serverOrderIds, setServerOrderIds] = useState<string[]>([]);
+  const [draggingServerId, setDraggingServerId] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [isTouchDevice, setIsTouchDevice] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  const [dragOverlaySize, setDragOverlaySize] = useState<{ width: number; height: number } | null>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const cardNodeRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const renameClickedRef = useRef(false);
+  const dragStartOrderRef = useRef<string[] | null>(null);
+  const serverOrderIdsRef = useRef<string[]>([]);
+  const suppressNextClickUntilRef = useRef(0);
   const { stageDelete, undoOverlay } = useStagedDeleteUndo();
+
+  const reorderDisabled = deleteConfirm || pendingDeletedServerIds.size > 0;
+
+  const serverById = useMemo(() => {
+    return new Map(servers.map((server) => [server.id, server]));
+  }, [servers]);
+
+  useEffect(() => {
+    setIsTouchDevice(typeof window !== 'undefined' && (window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0));
+  }, []);
+
+  useEffect(() => {
+    const incomingIds = servers.map((server) => server.id);
+    setServerOrderIds((prev) => {
+      const retained = prev.filter((id) => incomingIds.includes(id));
+      const missing = incomingIds.filter((id) => !retained.includes(id));
+      return [...retained, ...missing];
+    });
+  }, [servers]);
+
+  useEffect(() => {
+    serverOrderIdsRef.current = serverOrderIds;
+  }, [serverOrderIds]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const closeMenu = () => setContextMenu(null);
+    window.addEventListener('pointerdown', closeMenu);
+    window.addEventListener('scroll', closeMenu, true);
+    return () => {
+      window.removeEventListener('pointerdown', closeMenu);
+      window.removeEventListener('scroll', closeMenu, true);
+    };
+  }, [contextMenu]);
+
+  const orderedServers = useMemo(() => {
+    const ordered = serverOrderIds
+      .map((id) => serverById.get(id))
+      .filter((server): server is typeof servers[number] => !!server);
+    const missing = servers.filter((server) => !serverOrderIds.includes(server.id));
+    return [...ordered, ...missing];
+  }, [serverById, serverOrderIds, servers]);
+
+  const visibleServers = useMemo(() => {
+    return orderedServers.filter((server) => !pendingDeletedServerIds.has(server.id));
+  }, [orderedServers, pendingDeletedServerIds]);
+
+  const commitReorderedServers = async () => {
+    const startOrder = dragStartOrderRef.current;
+    dragStartOrderRef.current = null;
+    if (!startOrder || reorderDisabled) return;
+
+    const latestOrder = serverOrderIdsRef.current;
+    const changed = startOrder.length === latestOrder.length && startOrder.some((id, idx) => id !== latestOrder[idx]);
+    if (!changed) return;
+
+    try {
+      await reorderServers(latestOrder);
+      toast.success('Server order updated');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save server order');
+    }
+  };
+
+  const canDragServer = (serverId: string) => !reorderDisabled && selectedServerIds.has(serverId);
+
+  const visibleServerIds = useMemo(() => visibleServers.map((server) => server.id), [visibleServers]);
+  const visibleServerIdSet = useMemo(() => new Set(visibleServerIds), [visibleServerIds]);
+  const activeDragServer = useMemo(
+    () => (draggingServerId ? serverById.get(draggingServerId) ?? null : null),
+    [draggingServerId, serverById]
+  );
+
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: LONG_PRESS_DRAG_MS, tolerance: 8 } })
+  );
+
+  const reorderVisibleByIds = (fromId: string, toId: string) => {
+    if (fromId === toId) return;
+    setServerOrderIds((prev) => {
+      const visible = prev.filter((id) => visibleServerIdSet.has(id));
+      const hidden = prev.filter((id) => !visibleServerIdSet.has(id));
+      const fromIndex = visible.indexOf(fromId);
+      const toIndex = visible.indexOf(toId);
+      if (fromIndex < 0 || toIndex < 0) return prev;
+      const moved = arrayMove(visible, fromIndex, toIndex);
+      return [...moved, ...hidden];
+    });
+  };
+
+  const handleDndDragStart = (event: DragStartEvent) => {
+    const activeId = String(event.active.id);
+    if (!canDragServer(activeId) || reorderDisabled) return;
+    dragStartOrderRef.current = [...serverOrderIdsRef.current];
+    setContextMenu(null);
+    setDraggingServerId(activeId);
+    const activeNode = cardNodeRefs.current[activeId];
+    if (activeNode) {
+      const rect = activeNode.getBoundingClientRect();
+      setDragOverlaySize({ width: rect.width, height: rect.height });
+    } else {
+      setDragOverlaySize(null);
+    }
+  };
+
+  const handleDndDragOver = (event: DragOverEvent) => {
+    if (!draggingServerId || reorderDisabled) return;
+    const activeId = String(event.active.id);
+    const overId = event.over?.id ? String(event.over.id) : null;
+    if (!overId) return;
+    reorderVisibleByIds(activeId, overId);
+  };
+
+  const handleDndDragEnd = async (event: DragEndEvent) => {
+    const activeId = String(event.active.id);
+    const overId = event.over?.id ? String(event.over.id) : null;
+    if (overId) {
+      reorderVisibleByIds(activeId, overId);
+    }
+    setDraggingServerId(null);
+    setDragOverlaySize(null);
+    setSelectedServerIds(new Set());
+    suppressNextClickUntilRef.current = Date.now() + DRAG_CLICK_GUARD_MS;
+    await commitReorderedServers();
+  };
+
+  const handleDndDragCancel = () => {
+    if (dragStartOrderRef.current) {
+      setServerOrderIds(dragStartOrderRef.current);
+    }
+    dragStartOrderRef.current = null;
+    setDraggingServerId(null);
+    setDragOverlaySize(null);
+  };
 
   const handleStartRename = (_e: React.MouseEvent, server: typeof servers[0]) => {
     if (selectedServerIds.has(server.id)) {
@@ -384,9 +614,33 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
 
   const [flagsPopup, setFlagsPopup] = useState<{ serverId: string; flags: string; alwaysPreTouch: boolean } | null>(null);
 
-  const handleOpenFlagsPopup = (e: React.MouseEvent, server: typeof servers[0]) => {
-    e.stopPropagation();
+  const openFlagsPopup = (server: typeof servers[number]) => {
+    setContextMenu(null);
     setFlagsPopup({ serverId: server.id, flags: server.flags || 'none', alwaysPreTouch: server.alwaysPreTouch });
+  };
+
+  const handleOpenFlagsPopup = (e: React.MouseEvent, server: typeof servers[number]) => {
+    e.stopPropagation();
+    openFlagsPopup(server);
+  };
+
+  const applyFlagsPreset = async (server: typeof servers[number], preset: JVMFlagsPreset) => {
+    try {
+      const res = await fetch(`/api/servers/${server.id}/flags`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          flags: preset,
+          alwaysPreTouch: preset === 'none' ? false : server.alwaysPreTouch,
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to update flags');
+      await refreshServers();
+      toast.success('JVM flags updated');
+      setContextMenu(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update flags');
+    }
   };
 
   const handleSaveFlags = async () => {
@@ -406,9 +660,8 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
     }
   };
 
-  const handleOpenVersionPopup = async (e: React.MouseEvent, server: typeof servers[number]) => {
-    e.stopPropagation();
-
+  const openVersionPopup = async (server: typeof servers[number]) => {
+    setContextMenu(null);
     if (server.status === 'Running') {
       toast.error("Can't update while server is running.");
       return;
@@ -442,6 +695,11 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
     });
   };
 
+  const handleOpenVersionPopup = async (e: React.MouseEvent, server: typeof servers[number]) => {
+    e.stopPropagation();
+    await openVersionPopup(server);
+  };
+
   const handleApplyVersionUpdate = async () => {
     if (!updatePopup) return;
     setUpdatingVersion(true);
@@ -463,6 +721,20 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
     } finally {
       setUpdatingVersion(false);
     }
+  };
+
+  const handleServerContextMenu = (e: React.MouseEvent<HTMLDivElement>, server: typeof servers[number]) => {
+    if (isTouchDevice || reorderDisabled) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({
+      serverId: server.id,
+      x: e.clientX,
+      y: e.clientY,
+      showFlagsSubmenu: false,
+    });
   };
 
   const cancelImportAnalysis = async (analysisId?: string) => {
@@ -800,6 +1072,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
   useEscapeKey(!!flagsPopup, () => setFlagsPopup(null));
   useEscapeKey(!!updatePopup, () => setUpdatePopup(null));
   useEscapeKey(isImportOpen, () => closeImportModal());
+  useEscapeKey(!!contextMenu, () => setContextMenu(null));
 
   useEffect(() => {
     return () => {
@@ -812,10 +1085,169 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
     };
   }, [importAnalysis?.analysisId]);
 
-  const visibleServers = servers.filter((server) => !pendingDeletedServerIds.has(server.id));
   const showImportDropZone = isImportOpen && !importAnalysis && !isImportUploading && !isImportAnalyzing;
   const showImportProgress = isImportOpen && !importAnalysis && (isImportUploading || isImportAnalyzing);
   const showImportInfo = isImportOpen && !!importAnalysis;
+  const contextMenuServer = contextMenu ? servers.find((server) => server.id === contextMenu.serverId) || null : null;
+
+  const renderServerCardContent = (server: (typeof servers)[number], interactive: boolean) => {
+    const showUpdateButton = serverHasNewerVersion(server);
+    const statusBadgeClass =
+      server.status === 'Running'
+        ? 'bg-green-900/30 text-green-400'
+        : server.status === 'Crashed' || server.status === 'Error'
+          ? 'bg-red-900/30 text-red-400'
+          : server.status === 'Booting'
+            ? 'bg-yellow-900/30 text-yellow-400'
+            : server.status === 'Installing'
+              ? 'bg-blue-900/30 text-blue-400'
+              : 'bg-gray-700/30 text-gray-400';
+    const actionDisabled = server.status === 'Booting' || server.status === 'Installing' || !interactive;
+    const actionClass = clsx(
+      'text-xs px-3 py-1.5 rounded font-medium border transition-colors',
+      (server.status === 'Booting' || server.status === 'Installing') && 'opacity-50 cursor-not-allowed border-blue-500 text-blue-400',
+      server.status === 'Running' && 'border-red-500 text-red-400 hover:bg-red-900/20',
+      server.status === 'Error' && 'border-orange-500 text-orange-400 hover:bg-orange-900/20',
+      (server.status === 'Stopped' || server.status === 'Crashed') && 'border-green-500 text-green-400 hover:bg-green-900/20',
+      !interactive && 'opacity-95'
+    );
+
+    return (
+      <>
+        <div className="flex justify-between items-start mb-4">
+          <div>
+            {interactive && renamingId === server.id ? (
+              <input
+                ref={renameInputRef}
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onKeyDown={handleRenameKeyDown}
+                onBlur={handleRenameSubmit}
+                onClick={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
+                className="text-xl font-bold text-white mb-1 bg-transparent border-b border-[#E5B80B] outline-none w-full"
+              />
+            ) : (
+              <h3
+                className={clsx(
+                  'text-xl font-bold text-white mb-1 transition-colors',
+                  interactive && 'group-hover:text-[#E5B80B]',
+                  interactive && selectedServerIds.has(server.id) && 'cursor-text hover:border-b hover:border-dashed hover:border-[#E5B80B]/50'
+                )}
+                onClick={interactive ? (e) => handleStartRename(e, server) : undefined}
+              >
+                {server.name}
+              </h3>
+            )}
+            <div className="flex items-center gap-2 text-sm text-gray-400">
+              <span className="bg-[#3a3a3a] px-2 py-0.5 rounded text-xs">{server.type}</span>
+              <span>{server.version}</span>
+            </div>
+          </div>
+          <div className={clsx('flex items-center gap-1 px-2 py-1 rounded text-xs font-bold uppercase', statusBadgeClass)}>
+            {server.status === 'Running' && <Play size={10} fill="currentColor" />}
+            {server.status === 'Stopped' && <Square size={10} fill="currentColor" />}
+            {(server.status === 'Crashed' || server.status === 'Error') && <AlertTriangle size={10} />}
+            {(server.status === 'Booting' || server.status === 'Installing') && <Loader2 size={10} className="animate-spin" />}
+            {server.status}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6">
+          <div className="bg-[#1a1a1a] p-3 rounded border border-[#333]">
+            <div className="flex items-center gap-2 text-gray-400 text-xs mb-1">
+              <Cpu size={14} /> CPU
+            </div>
+            <div className="text-lg font-mono text-white">{server.status === 'Running' ? `${Math.round(server.cpu)}%` : '-'}</div>
+          </div>
+          <div className="bg-[#1a1a1a] p-3 rounded border border-[#333]">
+            <div className="flex items-center gap-2 text-gray-400 text-xs mb-1">
+              <HardDrive size={14} /> RAM
+            </div>
+            <div className="text-lg font-mono text-white">{server.status === 'Running' ? `${Math.round(server.ram)}%` : '-'}</div>
+          </div>
+        </div>
+
+        {server.status === 'Error' && server.installError && (
+          <div className="mt-3 text-xs text-red-400 bg-red-900/10 border border-red-900/30 rounded p-2 truncate" title={server.installError}>
+            {server.installError}
+          </div>
+        )}
+
+        <div className="mt-4 pt-4 border-t border-[#333] flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={interactive ? (e) => handleToggleAutoStart(e, server.id, server.autoStart) : undefined}
+              className="flex items-center gap-1.5 group/auto"
+              title={server.autoStart ? 'Auto-start enabled' : 'Auto-start disabled'}
+              disabled={!interactive}
+            >
+              <div className={clsx('relative w-8 h-4 rounded-full transition-colors', server.autoStart ? 'bg-[#E5B80B]' : 'bg-[#3a3a3a]')}>
+                <div className={clsx('absolute top-0.5 w-3 h-3 rounded-full transition-all', server.autoStart ? 'left-4.5 bg-black' : 'left-0.5 bg-gray-500')} />
+              </div>
+              <span className={clsx('text-[10px] font-medium transition-colors', server.autoStart ? 'text-[#E5B80B]' : 'text-gray-500 group-hover/auto:text-gray-400')}>
+                Auto Start
+              </span>
+            </button>
+
+            <button
+              onClick={interactive ? (e) => handleOpenFlagsPopup(e, server) : undefined}
+              className="flex items-center gap-1 text-[10px] font-medium text-gray-500 hover:text-[#E5B80B] transition-colors"
+              title="Change JVM Flags"
+              disabled={!interactive}
+            >
+              <Settings2 size={12} />
+              <span>JVM Flags</span>
+            </button>
+
+            {showUpdateButton && (
+              <button
+                onClick={interactive ? (e) => handleOpenVersionPopup(e, server) : undefined}
+                className="flex items-center gap-1 text-[10px] font-medium text-gray-500 hover:text-[#E5B80B] transition-colors"
+                title="Update server version"
+                disabled={!interactive}
+              >
+                <RotateCw size={12} />
+                <span>Update version</span>
+              </button>
+            )}
+          </div>
+
+          <button
+            onClick={
+              interactive
+                ? (e) => {
+                    e.stopPropagation();
+                    if (server.status === 'Error') {
+                      fetch(`/api/servers/${server.id}/retry-install`, { method: 'POST' })
+                        .then(() => {
+                          toast.success('Retrying installation...');
+                          refreshServers();
+                        })
+                        .catch(() => toast.error('Couldnâ€™t retry installation. Try again.'));
+                    } else {
+                      handleToggleStatus(e, server.id, server.status);
+                    }
+                  }
+                : undefined
+            }
+            disabled={actionDisabled}
+            className={actionClass}
+          >
+            {server.status === 'Running'
+              ? 'Stop'
+              : server.status === 'Booting'
+                ? 'Booting...'
+                : server.status === 'Installing'
+                  ? 'Installing...'
+                  : server.status === 'Error'
+                    ? 'Retry'
+                    : 'Start'}
+          </button>
+        </div>
+      </>
+    );
+  };
 
   if (isCreating) {
     return (
@@ -1108,19 +1540,37 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
           <p className="text-sm">Click "Create Server" or "Import Server" to get started.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {visibleServers.map((server) => (
-            <motion.div
-              key={server.id}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className={`
-                relative bg-[#202020] border rounded-lg p-6 cursor-pointer transition-all hover:shadow-lg group
-                ${selectedServerIds.has(server.id) ? 'border-[#E5B80B] ring-1 ring-[#E5B80B]' : 'border-[#3a3a3a] hover:border-gray-500'}
-              `}
-              onClick={() => handleSelectServer(server.id)}
-              onDoubleClick={() => handleOpenServer(server.id)}
-            >
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragStart={handleDndDragStart}
+          onDragOver={handleDndDragOver}
+          onDragEnd={handleDndDragEnd}
+          onDragCancel={handleDndDragCancel}
+        >
+          <SortableContext items={visibleServerIds} strategy={rectSortingStrategy}>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {visibleServers.map((server) => (
+                <SortableServerCard
+                  key={server.id}
+                  id={server.id}
+                  canDrag={canDragServer(server.id)}
+                  onNodeRef={(node) => {
+                    cardNodeRefs.current[server.id] = node;
+                  }}
+                  className={`
+                    relative bg-[#202020] border rounded-lg p-6 transition-[border-color,box-shadow] duration-150 hover:shadow-lg group
+                    ${draggingServerId === server.id
+                      ? 'border-[#E5B80B] ring-2 ring-[#E5B80B] z-20 shadow-2xl shadow-black/50 scale-[1.02]'
+                      : selectedServerIds.has(server.id)
+                        ? 'border-[#E5B80B] ring-1 ring-[#E5B80B]'
+                        : 'border-[#3a3a3a] hover:border-gray-500'}
+                    ${draggingServerId === server.id ? 'cursor-grabbing' : canDragServer(server.id) ? 'cursor-grab' : 'cursor-pointer'}
+                  `}
+                  onClick={() => handleSelectServer(server.id)}
+                  onDoubleClick={() => handleOpenServer(server.id)}
+                  onContextMenu={(e) => handleServerContextMenu(e, server)}
+                >
               <div className="flex justify-between items-start mb-4">
                 <div>
                   {renamingId === server.id ? (
@@ -1393,9 +1843,26 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
                   </div>
                 </div>
               )}
-            </motion.div>
-          ))}
-        </div>
+                </SortableServerCard>
+              ))}
+            </div>
+          </SortableContext>
+
+          <DragOverlay>
+            {activeDragServer ? (
+              <div
+                className="pointer-events-none relative bg-[#202020] border border-[#E5B80B] ring-2 ring-[#E5B80B] rounded-lg p-6 shadow-2xl shadow-black/60 opacity-100"
+                style={{
+                  width: dragOverlaySize?.width,
+                  minHeight: dragOverlaySize?.height,
+                  maxWidth: 'min(100%, 34rem)',
+                }}
+              >
+                {renderServerCardContent(activeDragServer, false)}
+              </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
       )}
 
       {/* Import Server Modal */}
@@ -1674,6 +2141,86 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
                 </button>
               </div>
             </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {contextMenu && contextMenuServer && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[70]"
+          >
+            <div
+              className="absolute z-[71] min-w-[220px] rounded-xl border border-[#3a3a3a] bg-[#1d1d1d] p-1.5 shadow-2xl"
+              style={{
+                left: Math.min(contextMenu.x, window.innerWidth - 260),
+                top: Math.min(contextMenu.y, window.innerHeight - 220),
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onMouseLeave={() => setContextMenu((prev) => (prev ? { ...prev, showFlagsSubmenu: false } : prev))}
+            >
+              <button
+                type="button"
+                className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-[#e6e6e6] hover:bg-[#2b2b2b]"
+                onMouseEnter={() => setContextMenu((prev) => (prev ? { ...prev, showFlagsSubmenu: true } : prev))}
+                onClick={(e) => e.preventDefault()}
+              >
+                <span className="flex items-center gap-2">
+                  <Settings2 size={14} className="text-[#E5B80B]" />
+                  JVM Flags
+                </span>
+                <ChevronRight size={14} className="text-gray-400" />
+              </button>
+              {contextMenu.showFlagsSubmenu && (
+                <div className="absolute left-full top-1 ml-1 min-w-[190px] rounded-xl border border-[#3a3a3a] bg-[#1d1d1d] p-1.5 shadow-2xl">
+                  {([
+                    { value: 'none', label: 'None' },
+                    { value: 'aikars', label: "Aikar's Flags" },
+                    { value: 'velocity', label: 'Velocity Proxy' },
+                    { value: 'modded', label: 'Modded' },
+                  ] as const).map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-[#e6e6e6] hover:bg-[#2b2b2b]"
+                      onClick={() => {
+                        void applyFlagsPreset(contextMenuServer, opt.value);
+                      }}
+                    >
+                      <span className={clsx("h-1.5 w-1.5 rounded-full", contextMenuServer.flags === opt.value ? "bg-[#E5B80B]" : "bg-[#4b4b4b]")} />
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {serverHasNewerVersion(contextMenuServer) && (
+                <button
+                  type="button"
+                  className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-[#e6e6e6] hover:bg-[#2b2b2b]"
+                  onClick={() => { void openVersionPopup(contextMenuServer); }}
+                >
+                  <RotateCw size={14} className="text-[#E5B80B]" />
+                  Update version
+                </button>
+              )}
+
+              <button
+                type="button"
+                className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-300 hover:bg-red-900/20"
+                onClick={() => {
+                  setContextMenu(null);
+                  setSelectedServerIds(new Set([contextMenuServer.id]));
+                  setDeleteConfirm(true);
+                }}
+              >
+                <Trash2 size={14} />
+                Delete server
+              </button>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
