@@ -44,6 +44,28 @@ func (h *ServerHandler) List(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, servers)
 }
 
+// Reorder handles PUT /api/servers/order
+func (h *ServerHandler) Reorder(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		OrderedIDs []string `json:"orderedIds"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	if len(req.OrderedIDs) == 0 {
+		respondError(w, http.StatusBadRequest, "orderedIds is required")
+		return
+	}
+
+	if err := h.mgr.SetServerOrder(req.OrderedIDs); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // Create handles POST /api/servers
 func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req CreateServerRequest

@@ -33,6 +33,7 @@ import (
 type ServerConfig struct {
 	ID                  string   `json:"id"`
 	Name                string   `json:"name"`
+	Order               int      `json:"order,omitempty"`
 	Type                string   `json:"type"`
 	Version             string   `json:"version"`
 	Port                int      `json:"port"`
@@ -1192,6 +1193,12 @@ func (m *Manager) load() error {
 		m.configs[cfg.ID] = cfg
 	}
 
+	if m.normalizeServerOrderLocked() {
+		if err := m.persist(); err != nil {
+			return fmt.Errorf("failed to persist migrated server order: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -1217,6 +1224,136 @@ func (m *Manager) persist() error {
 	}
 
 	return nil
+}
+
+func (m *Manager) normalizeServerOrderLocked() bool {
+	if len(m.configs) == 0 {
+		return false
+	}
+
+	cfgs := make([]*ServerConfig, 0, len(m.configs))
+	seenOrder := make(map[int]struct{}, len(m.configs))
+	hasInvalidOrder := false
+
+	for _, cfg := range m.configs {
+		cfgs = append(cfgs, cfg)
+		if cfg.Order <= 0 {
+			hasInvalidOrder = true
+			continue
+		}
+		if _, exists := seenOrder[cfg.Order]; exists {
+			hasInvalidOrder = true
+			continue
+		}
+		seenOrder[cfg.Order] = struct{}{}
+	}
+
+	if hasInvalidOrder {
+		sort.Slice(cfgs, func(i, j int) bool {
+			left := strings.TrimSpace(strings.ToLower(cfgs[i].Name))
+			right := strings.TrimSpace(strings.ToLower(cfgs[j].Name))
+			if left == right {
+				return cfgs[i].ID < cfgs[j].ID
+			}
+			return left < right
+		})
+	} else {
+		sort.Slice(cfgs, func(i, j int) bool {
+			if cfgs[i].Order == cfgs[j].Order {
+				left := strings.TrimSpace(strings.ToLower(cfgs[i].Name))
+				right := strings.TrimSpace(strings.ToLower(cfgs[j].Name))
+				if left == right {
+					return cfgs[i].ID < cfgs[j].ID
+				}
+				return left < right
+			}
+			return cfgs[i].Order < cfgs[j].Order
+		})
+	}
+
+	changed := false
+	for i, cfg := range cfgs {
+		nextOrder := i + 1
+		if cfg.Order != nextOrder {
+			cfg.Order = nextOrder
+			changed = true
+		}
+	}
+
+	return changed
+}
+
+func (m *Manager) nextServerOrderLocked() int {
+	maxOrder := 0
+	for _, cfg := range m.configs {
+		if cfg.Order > maxOrder {
+			maxOrder = cfg.Order
+		}
+	}
+	return maxOrder + 1
+}
+
+func (m *Manager) isAlphabeticalOrderLocked() bool {
+	if len(m.configs) <= 1 {
+		return true
+	}
+	ordered := make([]*ServerConfig, 0, len(m.configs))
+	alpha := make([]*ServerConfig, 0, len(m.configs))
+	for _, cfg := range m.configs {
+		ordered = append(ordered, cfg)
+		alpha = append(alpha, cfg)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].Order == ordered[j].Order {
+			left := strings.TrimSpace(strings.ToLower(ordered[i].Name))
+			right := strings.TrimSpace(strings.ToLower(ordered[j].Name))
+			if left == right {
+				return ordered[i].ID < ordered[j].ID
+			}
+			return left < right
+		}
+		return ordered[i].Order < ordered[j].Order
+	})
+	sort.Slice(alpha, func(i, j int) bool {
+		left := strings.TrimSpace(strings.ToLower(alpha[i].Name))
+		right := strings.TrimSpace(strings.ToLower(alpha[j].Name))
+		if left == right {
+			return alpha[i].ID < alpha[j].ID
+		}
+		return left < right
+	})
+	for i := range ordered {
+		if ordered[i].ID != alpha[i].ID {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *Manager) assignAlphabeticalOrderLocked() {
+	cfgs := make([]*ServerConfig, 0, len(m.configs))
+	for _, cfg := range m.configs {
+		cfgs = append(cfgs, cfg)
+	}
+	sort.Slice(cfgs, func(i, j int) bool {
+		left := strings.TrimSpace(strings.ToLower(cfgs[i].Name))
+		right := strings.TrimSpace(strings.ToLower(cfgs[j].Name))
+		if left == right {
+			return cfgs[i].ID < cfgs[j].ID
+		}
+		return left < right
+	})
+	for i, cfg := range cfgs {
+		cfg.Order = i + 1
+	}
+}
+
+func (m *Manager) assignNewServerOrderLocked(newCfg *ServerConfig) {
+	if m.isAlphabeticalOrderLocked() {
+		m.assignAlphabeticalOrderLocked()
+		return
+	}
+	newCfg.Order = m.nextServerOrderLocked()
 }
 
 // CreateServer creates a new server with the given config
@@ -1271,6 +1408,7 @@ func (m *Manager) CreateServer(name, serverType, version string, port int, minRA
 	cfg := &ServerConfig{
 		ID:             id,
 		Name:           name,
+		Order:          0,
 		Type:           serverType,
 		Version:        version,
 		Port:           port,
@@ -1284,6 +1422,7 @@ func (m *Manager) CreateServer(name, serverType, version string, port int, minRA
 	}
 
 	m.configs[id] = cfg
+	m.assignNewServerOrderLocked(cfg)
 	m.running[id] = &runningServer{
 		status:      "Installing",
 		logBuffer:   make([]ConsoleLogEntry, 0),
@@ -2195,11 +2334,68 @@ func (m *Manager) ListServers() []ServerInfo {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	servers := make([]ServerInfo, 0, len(m.configs))
+	ids := make([]string, 0, len(m.configs))
 	for id := range m.configs {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		left := m.configs[ids[i]]
+		right := m.configs[ids[j]]
+		if left.Order == right.Order {
+			leftName := strings.TrimSpace(strings.ToLower(left.Name))
+			rightName := strings.TrimSpace(strings.ToLower(right.Name))
+			if leftName == rightName {
+				return left.ID < right.ID
+			}
+			return leftName < rightName
+		}
+		return left.Order < right.Order
+	})
+
+	servers := make([]ServerInfo, 0, len(ids))
+	for _, id := range ids {
 		servers = append(servers, *m.serverInfo(id))
 	}
 	return servers
+}
+
+func (m *Manager) SetServerOrder(orderedIDs []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if len(orderedIDs) != len(m.configs) {
+		return fmt.Errorf("orderedIds must include every server exactly once")
+	}
+
+	seen := make(map[string]struct{}, len(orderedIDs))
+	validatedIDs := make([]string, 0, len(orderedIDs))
+	for _, rawID := range orderedIDs {
+		id := strings.TrimSpace(rawID)
+		if id == "" {
+			return fmt.Errorf("orderedIds contains an empty server id")
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return fmt.Errorf("orderedIds contains duplicate server id %q", id)
+		}
+		_, exists := m.configs[id]
+		if !exists {
+			return fmt.Errorf("orderedIds contains unknown server id %q", id)
+		}
+		seen[id] = struct{}{}
+		validatedIDs = append(validatedIDs, id)
+	}
+
+	for id := range m.configs {
+		if _, exists := seen[id]; !exists {
+			return fmt.Errorf("orderedIds is missing server id %q", id)
+		}
+	}
+
+	for i, id := range validatedIDs {
+		m.configs[id].Order = i + 1
+	}
+
+	return m.persist()
 }
 
 // serverInfo builds a ServerInfo from config and running state (caller must hold m.mu.RLock)

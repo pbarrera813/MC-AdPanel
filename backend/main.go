@@ -94,6 +94,7 @@ func main() {
 
 	// Server CRUD & lifecycle
 	mux.HandleFunc("GET /api/servers", serverHandler.List)
+	mux.HandleFunc("PUT /api/servers/order", serverHandler.Reorder)
 	mux.HandleFunc("POST /api/servers", serverHandler.Create)
 	mux.HandleFunc("POST /api/servers/{id}/start", serverHandler.Start)
 	mux.HandleFunc("POST /api/servers/{id}/start-safe", serverHandler.StartSafeMode)
