@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
 	"time"
 
@@ -59,7 +58,7 @@ func (h *PlayerHandler) Kick(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Reason string `json:"reason"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	_ = decodeJSONOptional(r, &req)
 
 	if err := h.mgr.KickPlayer(id, name, req.Reason); err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
@@ -77,7 +76,7 @@ func (h *PlayerHandler) Ban(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Reason string `json:"reason"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	_ = decodeJSONOptional(r, &req)
 
 	if err := h.mgr.BanPlayer(id, name, req.Reason); err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())

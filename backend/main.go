@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -322,8 +323,44 @@ func runStartupChecks(baseDir, distDir string) error {
 		return err
 	}
 	log.Printf("Self-check ok: frontend assets detected (%s)", distIndex)
+	logJavaToolchainStatus()
 	ensureLinuxHostnameResolvable()
 	return nil
+}
+
+func logJavaToolchainStatus() {
+	javaLine, javaErr := commandFirstLine("java", "-version")
+	if javaErr != nil {
+		log.Printf("Self-check warning: Java runtime unavailable: %v", javaErr)
+	} else {
+		log.Printf("Self-check ok: java detected (%s)", javaLine)
+	}
+
+	javacLine, javacErr := commandFirstLine("javac", "-version")
+	if javacErr != nil {
+		log.Printf("Self-check warning: Java compiler unavailable: %v", javacErr)
+		return
+	}
+	log.Printf("Self-check ok: javac detected (%s)", javacLine)
+}
+
+func commandFirstLine(name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		trimmed := strings.TrimSpace(string(out))
+		if trimmed == "" {
+			return "", err
+		}
+		return "", fmt.Errorf("%w (%s)", err, trimmed)
+	}
+
+	text := strings.TrimSpace(string(out))
+	if text == "" {
+		return name, nil
+	}
+	lines := strings.Split(text, "\n")
+	return strings.TrimSpace(lines[0]), nil
 }
 
 func ensureLinuxHostnameResolvable() {

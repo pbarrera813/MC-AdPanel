@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -49,7 +48,7 @@ func (h *ServerHandler) Reorder(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		OrderedIDs []string `json:"orderedIds"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -69,7 +68,7 @@ func (h *ServerHandler) Reorder(w http.ResponseWriter, r *http.Request) {
 // Create handles POST /api/servers
 func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req CreateServerRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -204,7 +203,7 @@ func (h *ServerHandler) ScheduleRestart(w http.ResponseWriter, r *http.Request) 
 	var req struct {
 		DelaySeconds int `json:"delaySeconds"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -237,7 +236,7 @@ func (h *ServerHandler) ScheduleStop(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		DelaySeconds int `json:"delaySeconds"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -264,7 +263,7 @@ func (h *ServerHandler) Clone(w http.ResponseWriter, r *http.Request) {
 		CopyWorlds  bool   `json:"copyWorlds"`
 		CopyConfig  bool   `json:"copyConfig"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -331,7 +330,7 @@ func (h *ServerHandler) CommitImport(w http.ResponseWriter, r *http.Request) {
 			OnlineMode *bool   `json:"onlineMode"`
 		} `json:"properties"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -416,7 +415,7 @@ func (h *ServerHandler) UpdateVersion(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Version string `json:"version"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -443,7 +442,7 @@ func (h *ServerHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 		MaxPlayers int    `json:"maxPlayers"`
 		Port       int    `json:"port"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -468,7 +467,7 @@ func (h *ServerHandler) SetFlags(w http.ResponseWriter, r *http.Request) {
 		Flags          string `json:"flags"`
 		AlwaysPreTouch bool   `json:"alwaysPreTouch"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -488,7 +487,7 @@ func (h *ServerHandler) SetAutoStart(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		AutoStart bool `json:"autoStart"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -508,7 +507,7 @@ func (h *ServerHandler) Rename(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name string `json:"name"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -536,28 +535,4 @@ func (h *ServerHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
-}
-
-// respondJSON writes a JSON response with the given status code
-func respondJSON(w http.ResponseWriter, status int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
-}
-
-// respondError writes a JSON error response
-func respondError(w http.ResponseWriter, status int, message string) {
-	trimmed := strings.TrimSpace(message)
-	if strings.HasPrefix(trimmed, "server_config_path_unsafe:") {
-		detail := strings.TrimSpace(strings.TrimPrefix(trimmed, "server_config_path_unsafe:"))
-		if detail == "" {
-			detail = "Server path is outside managed directories."
-		}
-		respondJSON(w, status, map[string]string{
-			"error":   "server_config_path_unsafe",
-			"message": detail,
-		})
-		return
-	}
-	respondJSON(w, status, map[string]string{"error": message})
 }

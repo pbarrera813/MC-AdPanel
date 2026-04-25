@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"minecraft-admin/minecraft"
@@ -98,7 +97,7 @@ func (h *BackupHandler) SetSchedule(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Schedule string `json:"schedule"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}

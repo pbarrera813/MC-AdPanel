@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"minecraft-admin/minecraft"
@@ -45,7 +44,7 @@ func (h *SettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		LoginUser          string `json:"loginUser"`
 		LoginPassword      string `json:"loginPassword"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
