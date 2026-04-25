@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { apiRequest, toErrorMessage } from '../lib/api';
 
 interface LoginPageProps {
   onLoginSuccess: () => void;
@@ -23,20 +24,19 @@ export const LoginPage = ({ onLoginSuccess }: LoginPageProps) => {
 
     setSubmitting(true);
     try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to login');
-      }
+      await apiRequest(
+        '/api/auth/login',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        },
+        'Failed to login'
+      );
 
       onLoginSuccess();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to login');
+      toast.error(toErrorMessage(err, 'Failed to login'));
     } finally {
       setSubmitting(false);
     }

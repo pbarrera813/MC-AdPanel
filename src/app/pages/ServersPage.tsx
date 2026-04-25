@@ -15,164 +15,39 @@ import {
   useSensor,
   useSensors,
 } from '@dnd-kit/core';
-import { SortableContext, rectSortingStrategy, arrayMove, useSortable } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
+import { SortableContext, rectSortingStrategy, arrayMove } from '@dnd-kit/sortable';
 import { toast } from 'sonner';
 import clsx from 'clsx';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { useStagedDeleteUndo } from '../hooks/useStagedDeleteUndo';
+import { ApiError, apiRequest, toErrorMessage } from '../lib/api';
+import {
+  DEFAULT_CREATE_FORM,
+  DRAG_CLICK_GUARD_MS,
+  importInfoContainerVariants,
+  importInfoItemVariants,
+  LONG_PRESS_DRAG_MS,
+  SERVER_TYPES,
+  compareVersionStrings,
+} from './servers/constants';
+import type {
+  ContextMenuState,
+  ImportAnalysis,
+  ImportBoolState,
+  ImportFormState,
+  JVMFlagsPreset,
+  VersionInfo,
+} from './servers/types';
+import { SortableServerCard } from './servers/SortableServerCard';
 
 interface ServersPageProps {
   onViewChange: (view: 'servers' | 'management' | 'plugins' | 'backups' | 'logs' | 'cloning') => void;
 }
 
-const SERVER_TYPES = [
-  'Vanilla', 'Spigot', 'Paper', 'Folia', 'Purpur', 'Velocity', 'Forge', 'Fabric', 'NeoForge'
-] as const;
-
-interface VersionInfo {
-  version: string;
-  latest: boolean;
-}
-
-interface ImportProperties {
-  maxPlayers?: number;
-  motd?: string;
-  whiteList?: boolean;
-  onlineMode?: boolean;
-}
-
-interface ImportAnalysis {
-  analysisId: string;
-  serverType: string;
-  typeDetected: boolean;
-  version: string;
-  worlds: string[];
-  plugins: string[];
-  mods: string[];
-  properties: ImportProperties;
-  resolvedName: string;
-  resolvedPort: number;
-}
-
-type ImportBoolState = 'true' | 'false';
-
-interface ImportFormState {
-  name: string;
-  port: string;
-  serverType: string;
-  version: string;
-  maxPlayers: string;
-  motd: string;
-  whiteList: ImportBoolState;
-  onlineMode: ImportBoolState;
-}
-
-type JVMFlagsPreset = 'none' | 'aikars' | 'velocity' | 'modded';
-
-const DEFAULT_CREATE_FORM = {
-  name: '',
-  flags: 'none' as JVMFlagsPreset,
-  alwaysPreTouch: false,
-  type: '',
-  version: '',
-  port: '25565',
-  minRam: '0.5',
-  maxRam: '1',
-  maxPlayers: '20',
-};
-
-const compareVersionStrings = (a: string, b: string) => {
-  const parse = (v: string) => v.split(/[^\d]+/).filter(Boolean).map(n => Number.parseInt(n, 10) || 0);
-  const ap = parse(a);
-  const bp = parse(b);
-  const maxLen = Math.max(ap.length, bp.length);
-  for (let i = 0; i < maxLen; i += 1) {
-    const av = ap[i] ?? 0;
-    const bv = bp[i] ?? 0;
-    if (av !== bv) return av > bv ? 1 : -1;
-  }
-  return 0;
-};
-
-const importInfoContainerVariants = {
-  hidden: { opacity: 0 },
-  show: {
-    opacity: 1,
-    transition: { staggerChildren: 0.03, delayChildren: 0.04 },
-  },
-};
-
-const importInfoItemVariants = {
-  hidden: { opacity: 0, y: 6 },
-  show: { opacity: 1, y: 0, transition: { duration: 0.18, ease: 'easeOut' } },
-};
-
-const LONG_PRESS_DRAG_MS = 450;
-const DRAG_CLICK_GUARD_MS = 450;
-
-type ContextMenuState = {
-  serverId: string;
-  x: number;
-  y: number;
-  showFlagsSubmenu: boolean;
-};
-
-interface SortableServerCardProps {
-  id: string;
-  canDrag: boolean;
-  className: string;
-  onClick: () => void;
-  onDoubleClick: () => void;
-  onContextMenu: (e: React.MouseEvent<HTMLDivElement>) => void;
-  onNodeRef?: (node: HTMLDivElement | null) => void;
-  children: React.ReactNode;
-}
-
-const SortableServerCard = ({
-  id,
-  canDrag,
-  className,
-  onClick,
-  onDoubleClick,
-  onContextMenu,
-  onNodeRef,
-  children,
-}: SortableServerCardProps) => {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id,
-    disabled: !canDrag,
-  });
-
-  const combinedRef = (node: HTMLDivElement | null) => {
-    setNodeRef(node);
-    onNodeRef?.(node);
-  };
-
-  const style: React.CSSProperties = {
-    transform: CSS.Transform.toString(transform),
-    transition: transition ?? 'transform 140ms ease-out',
-    touchAction: 'pan-y',
-    willChange: 'transform',
-  };
-
-  return (
-    <motion.div
-      ref={combinedRef}
-      {...(canDrag ? attributes : {})}
-      {...(canDrag ? listeners : {})}
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ type: 'tween', duration: 0.14, ease: 'easeOut' }}
-      className={clsx(className, isDragging && 'opacity-30')}
-      style={style}
-      onClick={onClick}
-      onDoubleClick={onDoubleClick}
-      onContextMenu={onContextMenu}
-    >
-      {children}
-    </motion.div>
-  );
+type SettingsDefaultsResponse = {
+  defaultMinRam?: string;
+  defaultMaxRam?: string;
+  defaultFlags?: JVMFlagsPreset;
 };
 
 export const ServersPage = ({ onViewChange }: ServersPageProps) => {
@@ -215,8 +90,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
 
   // Load system defaults for create form
   useEffect(() => {
-    fetch('/api/settings')
-      .then(res => res.json())
+    apiRequest<SettingsDefaultsResponse>('/api/settings', undefined, 'Couldn’t load settings.')
       .then(data => {
         const defaults = {
           minRam: data.defaultMinRam || DEFAULT_CREATE_FORM.minRam,
@@ -244,11 +118,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
     setVersionsLoading(true);
     setFormData(prev => ({ ...prev, version: '' }));
 
-    fetch(`/api/versions/${formData.type}`)
-      .then(res => {
-        if (!res.ok) throw new Error('Failed to fetch versions');
-        return res.json();
-      })
+    apiRequest<VersionInfo[]>(`/api/versions/${formData.type}`, undefined, `Couldn’t load versions for ${formData.type}.`)
       .then((data: VersionInfo[]) => {
         setVersions(data);
         const latest = data.find(v => v.latest);
@@ -269,11 +139,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
     const serverTypes = Array.from(new Set(servers.map(s => s.type)));
     serverTypes.forEach((serverType) => {
       if (typeVersionCatalog[serverType]) return;
-      fetch(`/api/versions/${serverType}`)
-        .then(res => {
-          if (!res.ok) throw new Error('Failed to fetch versions');
-          return res.json();
-        })
+      apiRequest<VersionInfo[]>(`/api/versions/${serverType}`, undefined, `Couldn’t load versions for ${serverType}.`)
         .then((data: VersionInfo[]) => {
           setTypeVersionCatalog(prev => ({ ...prev, [serverType]: data }));
         })
@@ -349,11 +215,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
       },
       onCommit: async () => {
         for (const serverId of serverIds) {
-          const res = await fetch(`/api/servers/${serverId}`, { method: 'DELETE' });
-          if (!res.ok) {
-            const data = await res.json().catch(() => ({}));
-            throw new Error(data.error || `Failed to delete server ${serverId}`);
-          }
+          await apiRequest<void>(`/api/servers/${serverId}`, { method: 'DELETE' }, `Failed to delete server ${serverId}`);
         }
         setPendingDeletedServerIds((prev) => {
           const next = new Set(prev);
@@ -409,6 +271,16 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Couldn’t complete that action. Try again.');
+    }
+  };
+
+  const handleRetryInstall = async (serverId: string) => {
+    try {
+      await apiRequest<void>(`/api/servers/${serverId}/retry-install`, { method: 'POST' }, 'Couldn’t retry installation. Try again.');
+      toast.success('Retrying installation...');
+      await refreshServers();
+    } catch (err) {
+      toast.error(toErrorMessage(err, 'Couldn’t retry installation. Try again.'));
     }
   };
 
@@ -589,16 +461,15 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
       return;
     }
     try {
-      const res = await fetch(`/api/servers/${renamingId}/name`, {
+      await apiRequest(`/api/servers/${renamingId}/name`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: trimmed }),
-      });
-      if (!res.ok) throw new Error('Failed to rename server');
+      }, 'Failed to rename server');
       await refreshServers();
       toast.success('Server renamed');
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to rename server');
+      toast.error(toErrorMessage(err, 'Failed to rename server'));
     }
     setRenamingId(null);
   };
@@ -626,37 +497,35 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
 
   const applyFlagsPreset = async (server: typeof servers[number], preset: JVMFlagsPreset) => {
     try {
-      const res = await fetch(`/api/servers/${server.id}/flags`, {
+      await apiRequest(`/api/servers/${server.id}/flags`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           flags: preset,
           alwaysPreTouch: preset === 'none' ? false : server.alwaysPreTouch,
         }),
-      });
-      if (!res.ok) throw new Error('Failed to update flags');
+      }, 'Failed to update flags');
       await refreshServers();
       toast.success('JVM flags updated');
       setContextMenu(null);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update flags');
+      toast.error(toErrorMessage(err, 'Failed to update flags'));
     }
   };
 
   const handleSaveFlags = async () => {
     if (!flagsPopup) return;
     try {
-      const res = await fetch(`/api/servers/${flagsPopup.serverId}/flags`, {
+      await apiRequest(`/api/servers/${flagsPopup.serverId}/flags`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ flags: flagsPopup.flags, alwaysPreTouch: flagsPopup.alwaysPreTouch }),
-      });
-      if (!res.ok) throw new Error('Failed to update flags');
+      }, 'Failed to update flags');
       await refreshServers();
-      toast.success('JVM flags updated — changes will apply on next server restart');
+      toast.success('JVM flags updated - changes will apply on next server restart');
       setFlagsPopup(null);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update flags');
+      toast.error(toErrorMessage(err, 'Failed to update flags'));
     }
   };
 
@@ -670,12 +539,10 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
     let list = typeVersionCatalog[server.type];
     if (!list) {
       try {
-        const res = await fetch(`/api/versions/${server.type}`);
-        if (!res.ok) throw new Error('Failed to fetch versions');
-        list = await res.json();
+        list = await apiRequest<VersionInfo[]>(`/api/versions/${server.type}`, undefined, 'Failed to fetch versions');
         setTypeVersionCatalog(prev => ({ ...prev, [server.type]: list || [] }));
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'Failed to load versions');
+        toast.error(toErrorMessage(err, 'Failed to load versions'));
         return;
       }
     }
@@ -704,20 +571,16 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
     if (!updatePopup) return;
     setUpdatingVersion(true);
     try {
-      const res = await fetch(`/api/servers/${updatePopup.serverId}/version`, {
+      await apiRequest(`/api/servers/${updatePopup.serverId}/version`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ version: updatePopup.selectedVersion }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to update server version');
-      }
+      }, 'Failed to update server version');
       toast.info(`Updating to ${updatePopup.selectedVersion}...`);
       setUpdatePopup(null);
       await refreshServers();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update server version');
+      toast.error(toErrorMessage(err, 'Failed to update server version'));
     } finally {
       setUpdatingVersion(false);
     }
@@ -741,7 +604,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
     const id = analysisId?.trim();
     if (!id) return;
     try {
-      await fetch(`/api/servers/import/analyze/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      await apiRequest<void>(`/api/servers/import/analyze/${encodeURIComponent(id)}`, { method: 'DELETE' }, 'Failed to cancel import analysis');
     } catch {
       // Ignore cleanup errors; TTL cleanup on backend will handle leftovers.
     }
@@ -957,44 +820,46 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
     setIsImportSubmitting(true);
     try {
       const versionOverride = versionLockedByDetection ? undefined : importForm.version.trim();
-      const res = await fetch('/api/servers/import/commit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          analysisId: importAnalysis.analysisId,
-          name: importForm.name.trim(),
-          port,
-          typeOverride: requiresTypeChoice ? importForm.serverType.trim() : '',
-          version: versionOverride,
-          properties: {
-            maxPlayers,
-            motd: importForm.motd.trim() || null,
-            whiteList: fromImportBoolState(importForm.whiteList),
-            onlineMode: fromImportBoolState(importForm.onlineMode),
-          },
-        }),
-      });
-      const data = await res.json().catch(() => ({} as { error?: string; message?: string; suggestedPort?: number }));
-      if (!res.ok) {
-        const payload = data as { error?: string; message?: string; suggestedPort?: number };
-        if (payload.error === 'port_in_use') {
-          const suggestedPort = typeof payload.suggestedPort === 'number' ? payload.suggestedPort : null;
-          const hint = suggestedPort ? ` Closest free port: ${suggestedPort}.` : '';
-          toast.error(`That port is already in use.${hint}`);
-          return;
-        }
-        if (payload.error === 'invalid_server_version') {
-          toast.error(payload.message || 'Selected version is not valid for this server type');
-          return;
-        }
-        throw new Error(data.error || 'Failed to import server');
-      }
+      await apiRequest(
+        '/api/servers/import/commit',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            analysisId: importAnalysis.analysisId,
+            name: importForm.name.trim(),
+            port,
+            typeOverride: requiresTypeChoice ? importForm.serverType.trim() : '',
+            version: versionOverride,
+            properties: {
+              maxPlayers,
+              motd: importForm.motd.trim() || null,
+              whiteList: fromImportBoolState(importForm.whiteList),
+              onlineMode: fromImportBoolState(importForm.onlineMode),
+            },
+          }),
+        },
+        'Failed to import server'
+      );
       await refreshServers();
       toast.success('Server imported successfully');
       resetImportState();
       setIsImportOpen(false);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to import server');
+      if (err instanceof ApiError) {
+        const payload = (err.details ?? {}) as { message?: string; suggestedPort?: number };
+        if (err.code === 'port_in_use') {
+          const suggestedPort = typeof payload.suggestedPort === 'number' ? payload.suggestedPort : null;
+          const hint = suggestedPort ? ` Closest free port: ${suggestedPort}.` : '';
+          toast.error(`That port is already in use.${hint}`);
+          return;
+        }
+        if (err.code === 'invalid_server_version') {
+          toast.error(payload.message || 'Selected version is not valid for this server type');
+          return;
+        }
+      }
+      toast.error(toErrorMessage(err, 'Failed to import server'));
     } finally {
       setIsImportSubmitting(false);
     }
@@ -1020,11 +885,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
 
     let cancelled = false;
     setImportVersionsLoading(true);
-    fetch(`/api/versions/${serverType}`)
-      .then((res) => {
-        if (!res.ok) throw new Error('Failed to fetch versions');
-        return res.json() as Promise<VersionInfo[]>;
-      })
+    apiRequest<VersionInfo[]>(`/api/versions/${serverType}`, undefined, `Couldn’t load versions for ${serverType}.`)
       .then((items) => {
         if (cancelled) return;
         const list = Array.isArray(items) ? items : [];
@@ -1055,16 +916,15 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
   const handleToggleAutoStart = async (e: React.MouseEvent, serverId: string, currentValue: boolean) => {
     e.stopPropagation();
     try {
-      const res = await fetch(`/api/servers/${serverId}/auto-start`, {
+      await apiRequest(`/api/servers/${serverId}/auto-start`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ autoStart: !currentValue }),
-      });
-      if (!res.ok) throw new Error('Failed to update auto-start');
+      }, 'Failed to update auto-start');
       await refreshServers();
       toast.success(!currentValue ? 'Auto-start enabled' : 'Auto-start disabled');
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update auto-start');
+      toast.error(toErrorMessage(err, 'Failed to update auto-start'));
     }
   };
 
@@ -1219,12 +1079,12 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
                 ? (e) => {
                     e.stopPropagation();
                     if (server.status === 'Error') {
-                      fetch(`/api/servers/${server.id}/retry-install`, { method: 'POST' })
+                      apiRequest<void>(`/api/servers/${server.id}/retry-install`, { method: 'POST' }, 'Couldn’t retry installation. Try again.')
                         .then(() => {
                           toast.success('Retrying installation...');
                           refreshServers();
                         })
-                        .catch(() => toast.error('Couldnâ€™t retry installation. Try again.'));
+                        .catch(() => toast.error('Couldn’t retry installation. Try again.'));
                     } else {
                       handleToggleStatus(e, server.id, server.status);
                     }
@@ -1687,7 +1547,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
                   onClick={(e) => {
                     e.stopPropagation();
                     if (server.status === 'Error') {
-                      fetch(`/api/servers/${server.id}/retry-install`, { method: 'POST' })
+                      apiRequest<void>(`/api/servers/${server.id}/retry-install`, { method: 'POST' }, 'Couldn’t retry installation. Try again.')
                         .then(() => { toast.success('Retrying installation...'); refreshServers(); })
                         .catch(() => toast.error('Couldn’t retry installation. Try again.'));
                     } else {

@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { useStagedDeleteUndo } from '../hooks/useStagedDeleteUndo';
+import { apiRequest, toErrorMessage } from '../lib/api';
 
 type LogTab = 'live' | 'crash-reports';
 
@@ -168,12 +169,14 @@ const StoredLogs = ({ serverId }: { serverId: string }) => {
   const fetchFiles = useCallback(async () => {
     setLoadingFiles(true);
     try {
-      const res = await fetch(`/api/servers/${serverId}/logs`);
-      if (!res.ok) throw new Error('Failed to fetch logs');
-      const data: ServerFile[] = await res.json();
+      const data = await apiRequest<ServerFile[]>(
+        `/api/servers/${serverId}/logs`,
+        undefined,
+        'Failed to fetch logs'
+      );
       setFiles(data);
     } catch (err) {
-      console.error('Failed to fetch logs:', err);
+      console.error(toErrorMessage(err, 'Failed to fetch logs'));
     } finally {
       setLoadingFiles(false);
     }
@@ -252,8 +255,11 @@ const StoredLogs = ({ serverId }: { serverId: string }) => {
       },
       onCommit: async () => {
         const path = `logs/${name}`;
-        const res = await fetch(`/api/servers/${serverId}/files?path=${encodeURIComponent(path)}`, { method: 'DELETE' });
-        if (!res.ok) throw new Error('Failed to delete');
+        await apiRequest<void>(
+          `/api/servers/${serverId}/files?path=${encodeURIComponent(path)}`,
+          { method: 'DELETE' },
+          'Failed to delete log file'
+        );
         setPendingDeletedFiles((prev) => {
           const next = new Set(prev);
           next.delete(name);
@@ -287,8 +293,11 @@ const StoredLogs = ({ serverId }: { serverId: string }) => {
       },
       onCommit: async () => {
         for (const name of names) {
-          const res = await fetch(`/api/servers/${serverId}/files?path=${encodeURIComponent(`logs/${name}`)}`, { method: 'DELETE' });
-          if (!res.ok) throw new Error('Failed to delete');
+          await apiRequest<void>(
+            `/api/servers/${serverId}/files?path=${encodeURIComponent(`logs/${name}`)}`,
+            { method: 'DELETE' },
+            `Failed to delete ${name}`
+          );
         }
         setPendingDeletedFiles((prev) => {
           const next = new Set(prev);
@@ -695,12 +704,14 @@ const CrashReports = () => {
   const fetchReports = useCallback(async () => {
     if (!activeServer) return;
     try {
-      const res = await fetch(`/api/servers/${activeServer.id}/crash-reports`);
-      if (!res.ok) throw new Error('Failed to fetch crash reports');
-      const data: CrashReport[] = await res.json();
+      const data = await apiRequest<CrashReport[]>(
+        `/api/servers/${activeServer.id}/crash-reports`,
+        undefined,
+        'Failed to fetch crash reports'
+      );
       setReports(data);
     } catch (err) {
-      console.error('Failed to fetch crash reports:', err);
+      console.error(toErrorMessage(err, 'Failed to fetch crash reports'));
     } finally {
       setLoading(false);
     }
@@ -741,14 +752,15 @@ const CrashReports = () => {
   const handleCopy = async (reportName: string) => {
     if (!activeServer) return;
     try {
-      const res = await fetch(`/api/servers/${activeServer.id}/crash-reports/${encodeURIComponent(reportName)}/copy`, {
-        method: 'POST',
-      });
-      if (!res.ok) throw new Error('Failed to copy crash report');
+      await apiRequest(
+        `/api/servers/${activeServer.id}/crash-reports/${encodeURIComponent(reportName)}/copy`,
+        { method: 'POST' },
+        'Failed to copy crash report'
+      );
       toast.success('Crash report copy created');
       fetchReports();
-    } catch {
-      toast.error('Failed to copy crash report');
+    } catch (err) {
+      toast.error(toErrorMessage(err, 'Failed to copy crash report'));
     }
   };
 
@@ -813,10 +825,11 @@ const CrashReports = () => {
         });
       },
       onCommit: async () => {
-        const res = await fetch(`/api/servers/${activeServer.id}/crash-reports/${encodeURIComponent(reportName)}`, {
-          method: 'DELETE',
-        });
-        if (!res.ok) throw new Error('Failed to delete crash report');
+        await apiRequest<void>(
+          `/api/servers/${activeServer.id}/crash-reports/${encodeURIComponent(reportName)}`,
+          { method: 'DELETE' },
+          'Failed to delete crash report'
+        );
         setPendingDeletedReports((prev) => {
           const next = new Set(prev);
           next.delete(reportName);
@@ -850,8 +863,11 @@ const CrashReports = () => {
       },
       onCommit: async () => {
         for (const name of names) {
-          const res = await fetch(`/api/servers/${activeServer.id}/crash-reports/${encodeURIComponent(name)}`, { method: 'DELETE' });
-          if (!res.ok) throw new Error(`Failed to delete ${name}`);
+          await apiRequest<void>(
+            `/api/servers/${activeServer.id}/crash-reports/${encodeURIComponent(name)}`,
+            { method: 'DELETE' },
+            `Failed to delete ${name}`
+          );
         }
         setPendingDeletedReports((prev) => {
           const next = new Set(prev);

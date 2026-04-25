@@ -6,6 +6,7 @@ import clsx from 'clsx';
 import { AnimatePresence, motion } from 'motion/react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../components/ui/tooltip';
 import { useServer } from '../context/ServerContext';
+import { apiRequest, toErrorMessage } from '../lib/api';
 
 type View = 'servers' | 'management' | 'plugins' | 'backups' | 'logs' | 'cloning' | 'settings';
 
@@ -190,9 +191,7 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
 
   const fetchUsage = useCallback(async () => {
     try {
-      const res = await fetch('/api/system/usage');
-      if (!res.ok) throw new Error('Failed to load overall usage');
-      const data: SystemUsage = await res.json();
+      const data = await apiRequest<SystemUsage>('/api/system/usage', undefined, 'Failed to load overall usage');
       setUsage(data);
       setUsageError(null);
       setUsageHistory(prev => {
@@ -200,7 +199,7 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
         return next.slice(-25);
       });
     } catch (err) {
-      setUsageError(err instanceof Error ? err.message : 'Failed to load overall usage');
+      setUsageError(toErrorMessage(err, 'Failed to load overall usage'));
     } finally {
       setUsageLoading(false);
     }
@@ -210,9 +209,7 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
     let isMounted = true;
     const loadSettings = async () => {
       try {
-        const res = await fetch('/api/settings');
-        if (!res.ok) throw new Error('Couldn’t load settings.');
-        const data = await res.json();
+        const data = await apiRequest('/api/settings', undefined, 'Couldn’t load settings.');
         if (isMounted) {
           setLoginUser(data.loginUser || 'mcpanel');
           if (typeof data.passwordMinLength === 'number' && data.passwordMinLength > 0) {
@@ -240,7 +237,7 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
           });
         }
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'Couldn’t load settings.');
+        toast.error(toErrorMessage(err, 'Couldn’t load settings.'));
       } finally {
         if (isMounted) setLoading(false);
       }
@@ -303,7 +300,7 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
       }));
       await fetchUsage();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to stop server');
+      toast.error(toErrorMessage(err, 'Failed to stop server'));
     } finally {
       setStoppingServerIds(prev => {
         const next = new Set(prev);
@@ -347,26 +344,26 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
 
     setSaving(true);
     try {
-      const res = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          loginUser: trimmedLoginUser,
-          loginPassword,
-          userAgent,
-          defaultMinRam,
-          defaultMaxRam,
-          defaultFlags,
-          statusPollInterval: pollInterval,
-          tpsPollInterval: parsedTpsPoll,
-          playerSyncInterval: parsedPlayerSync,
-          pingPollInterval: parsedPingPoll,
-        }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Couldn’t save settings. Try again.');
-      }
+      await apiRequest(
+        '/api/settings',
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            loginUser: trimmedLoginUser,
+            loginPassword,
+            userAgent,
+            defaultMinRam,
+            defaultMaxRam,
+            defaultFlags,
+            statusPollInterval: pollInterval,
+            tpsPollInterval: parsedTpsPoll,
+            playerSyncInterval: parsedPlayerSync,
+            pingPollInterval: parsedPingPoll,
+          }),
+        },
+        'Couldn’t save settings. Try again.'
+      );
       setLoginPassword('');
       setSavedSnapshot({
         loginUser: trimmedLoginUser,
@@ -382,7 +379,7 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
       });
       toast.success('Applied changes.');
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Couldn’t save settings. Try again.');
+      toast.error(toErrorMessage(err, 'Couldn’t save settings. Try again.'));
     } finally {
       setSaving(false);
     }

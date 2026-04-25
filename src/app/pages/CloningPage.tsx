@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import clsx from 'clsx';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { Checkbox } from '../components/ui/checkbox';
+import { apiRequest, toErrorMessage } from '../lib/api';
 
 const findNextAvailablePort = (startPort: number, occupiedPorts: Set<number>) => {
   let port = Math.max(1024, startPort);
@@ -67,22 +68,22 @@ export const CloningPage = () => {
       for (let i = 0; i < sources.length; i += 1) {
         const source = sources[i];
         const cloneName = sources.length === 1 ? newName : `${source.name} (Clone)`;
-        const res = await fetch('/api/servers/clone', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sourceId: source.id,
-            name: cloneName,
-            port: plannedPorts[i],
-            copyPlugins: options.plugins,
-            copyWorlds: options.worlds,
-            copyConfig: options.config,
-          }),
-        });
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.error || `Failed to clone ${source.name}`);
-        }
+        await apiRequest(
+          '/api/servers/clone',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sourceId: source.id,
+              name: cloneName,
+              port: plannedPorts[i],
+              copyPlugins: options.plugins,
+              copyWorlds: options.worlds,
+              copyConfig: options.config,
+            }),
+          },
+          `Failed to clone ${source.name}`
+        );
       }
       await refreshServers();
       toast.success(sources.length === 1 ? 'Server cloned successfully' : `${sources.length} servers cloned successfully`);
@@ -90,7 +91,7 @@ export const CloningPage = () => {
       setSelectedSourceIds(new Set());
       setNewName('');
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to clone server');
+      toast.error(toErrorMessage(err, 'Failed to clone server'));
       await refreshServers();
     }
   };
@@ -139,7 +140,7 @@ export const CloningPage = () => {
             <div className="flex justify-between items-start mb-4">
                <div>
                  <h3 className={clsx("text-lg font-bold mb-1", selectedSourceIds.has(server.id) ? "text-[#E5B80B]" : "text-white")}>{server.name}</h3>
-                 <div className="text-sm text-gray-500">{server.type} • {server.version}</div>
+                 <div className="text-sm text-gray-500">{server.type} - {server.version}</div>
                </div>
                {selectedSourceIds.has(server.id) && (
                  <div className="bg-[#E5B80B] rounded-full p-1 text-black">
@@ -247,7 +248,7 @@ export const CloningPage = () => {
                       {selectedSources.map((s, i) => (
                         <li key={s.id} className="flex items-center gap-2">
                           <span className="w-1.5 h-1.5 rounded-full bg-[#E5B80B] flex-shrink-0" />
-                          {s.name} <span className="text-gray-500 text-xs">→ Port {clonePortPlan[i]}</span>
+                          {s.name} <span className="text-gray-500 text-xs">-&gt; Port {clonePortPlan[i]}</span>
                         </li>
                       ))}
                     </ul>

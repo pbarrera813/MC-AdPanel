@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import { useEscapeKey } from '../../hooks/useEscapeKey';
 import { Checkbox } from '../ui/checkbox';
 import { useStagedDeleteUndo } from '../../hooks/useStagedDeleteUndo';
+import { apiRequest, toErrorMessage } from '../../lib/api';
 
 interface FileBrowserProps {
   server: Server;
@@ -250,12 +251,14 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
     }
     setLoading(true);
     try {
-      const res = await fetch(`/api/servers/${server.id}/files?path=${encodeURIComponent(currentPath)}`);
-      if (!res.ok) throw new Error('Failed to fetch files');
-      const data: FileEntry[] = await res.json();
+      const data = await apiRequest<FileEntry[]>(
+        `/api/servers/${server.id}/files?path=${encodeURIComponent(currentPath)}`,
+        undefined,
+        'Failed to fetch files'
+      );
       setEntries(data || []);
     } catch (err) {
-      toast.error('Failed to load directory');
+      toast.error(toErrorMessage(err, 'Failed to load directory'));
       setEntries([]);
     } finally {
       setLoading(false);
@@ -282,8 +285,7 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/settings')
-      .then((res) => (res.ok ? res.json() : null))
+    apiRequest<{ maxUploadBytes?: number }>('/api/settings', undefined, 'Failed to load settings')
       .then((data) => {
         if (cancelled || !data) return;
         if (typeof data.maxUploadBytes === 'number' && data.maxUploadBytes > 0) {
@@ -525,16 +527,19 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
     if (!editingFile) return;
     setSaving(true);
     try {
-      const res = await fetch(`/api/servers/${server.id}/files/content`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: editingFile.path, content: editContent }),
-      });
-      if (!res.ok) throw new Error('Failed to save file');
+      await apiRequest(
+        `/api/servers/${server.id}/files/content`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: editingFile.path, content: editContent }),
+        },
+        'Failed to save file'
+      );
       toast.success('File saved');
       setEditingFile(null);
     } catch (err) {
-      toast.error('Failed to save file');
+      toast.error(toErrorMessage(err, 'Failed to save file'));
     } finally {
       setSaving(false);
     }
@@ -576,10 +581,11 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
       },
       onCommit: async () => {
         for (const targetPath of paths) {
-          const res = await fetch(`/api/servers/${server.id}/files?path=${encodeURIComponent(targetPath)}`, {
-            method: 'DELETE',
-          });
-          if (!res.ok) throw new Error('Failed to delete');
+          await apiRequest<void>(
+            `/api/servers/${server.id}/files?path=${encodeURIComponent(targetPath)}`,
+            { method: 'DELETE' },
+            `Failed to delete ${targetPath}`
+          );
         }
         setPendingDeletedPaths((prev) => {
           const next = new Set(prev);
@@ -636,18 +642,21 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
   const handleNewFolder = async () => {
     const folderPath = currentPath === '.' ? newFolderName : `${currentPath}/${newFolderName}`;
     try {
-      const res = await fetch(`/api/servers/${server.id}/files/mkdir`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: folderPath }),
-      });
-      if (!res.ok) throw new Error('Failed to create folder');
+      await apiRequest(
+        `/api/servers/${server.id}/files/mkdir`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: folderPath }),
+        },
+        'Failed to create folder'
+      );
       toast.success('Folder created');
       setIsNewFolderModalOpen(false);
       setNewFolderName('New Folder');
       fetchFiles();
     } catch (err) {
-      toast.error('Failed to create folder');
+      toast.error(toErrorMessage(err, 'Failed to create folder'));
     }
   };
 
@@ -728,11 +737,11 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
     currentPath === '.' ? item.relativePath : `${currentPath}/${item.relativePath}`;
 
   const checkPathExists = async (path: string): Promise<boolean> => {
-    const res = await fetch(`/api/servers/${server.id}/files/exists?path=${encodeURIComponent(path)}`);
-    if (!res.ok) {
-      throw new Error('Failed to check existing files');
-    }
-    const data = await res.json() as { exists?: boolean };
+    const data = await apiRequest<{ exists?: boolean }>(
+      `/api/servers/${server.id}/files/exists?path=${encodeURIComponent(path)}`,
+      undefined,
+      'Failed to check existing files'
+    );
     return data.exists === true;
   };
 
@@ -860,7 +869,7 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
       if (err instanceof DOMException && err.name === 'AbortError') {
         toast.info('Upload cancelled');
       } else {
-        toast.error(err instanceof Error ? err.message : 'Couldn’t upload file. Try again.');
+        toast.error(toErrorMessage(err, 'Couldn’t upload file. Try again.'));
       }
     } finally {
       if (uploadConflictResolverRef.current) {
@@ -1021,22 +1030,22 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
     setRenaming(true);
     const oldPath = currentPath === '.' ? renameTarget : `${currentPath}/${renameTarget}`;
     try {
-      const res = await fetch(`/api/servers/${server.id}/files/rename`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ oldPath, newName: newName.trim() }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to rename');
-      }
+      await apiRequest(
+        `/api/servers/${server.id}/files/rename`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ oldPath, newName: newName.trim() }),
+        },
+        'Failed to rename'
+      );
       toast.success('Renamed successfully');
       setRenameExtensionWarningOpen(false);
       setIsRenameModalOpen(false);
       setSelectedNames(new Set());
       fetchFiles();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to rename');
+      toast.error(toErrorMessage(err, 'Failed to rename'));
     } finally {
       setRenaming(false);
     }

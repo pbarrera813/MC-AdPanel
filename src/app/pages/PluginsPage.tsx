@@ -7,6 +7,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '../components/ui/toolti
 import clsx from 'clsx';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { useStagedDeleteUndo } from '../hooks/useStagedDeleteUndo';
+import { apiRequest, toErrorMessage } from '../lib/api';
 
 type UploadConflictAction = 'prompt' | 'replace' | 'skip';
 
@@ -93,9 +94,11 @@ export const PluginsPage = () => {
     const id = serverId ?? activeServerId;
     if (!id) return;
     try {
-      const res = await fetch(`/api/servers/${id}/plugins`);
-      if (!res.ok) throw new Error('Failed to fetch plugins');
-      const data: PluginWithUpdate[] = await res.json();
+      const data = await apiRequest<PluginWithUpdate[]>(
+        `/api/servers/${id}/plugins`,
+        undefined,
+        'Failed to fetch plugins'
+      );
       // Merge sticky update info so "download update" buttons remain visible until user leaves
       const merged = (data || []).map(p => {
         const sticky = stickyUpdates[p.fileName];
@@ -108,7 +111,7 @@ export const PluginsPage = () => {
       });
       setPlugins(merged);
     } catch (err) {
-      console.error('Failed to fetch plugins:', err);
+      console.error(toErrorMessage(err, 'Failed to fetch plugins'));
     } finally {
       setLoading(false);
     }
@@ -120,8 +123,7 @@ export const PluginsPage = () => {
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/settings')
-      .then((res) => (res.ok ? res.json() : null))
+    apiRequest<{ maxUploadBytes?: number }>('/api/settings', undefined, 'Failed to load settings')
       .then((data) => {
         if (cancelled || !data) return;
         if (typeof data.maxUploadBytes === 'number' && data.maxUploadBytes > 0) {
@@ -157,9 +159,11 @@ export const PluginsPage = () => {
 
   const fetchUpdateResults = useCallback(async () => {
     if (!activeServerId) return [];
-    const res = await fetch(`/api/servers/${activeServerId}/plugins/check-updates`);
-    if (!res.ok) throw new Error('Failed to check updates');
-    const results = await res.json();
+    const results = await apiRequest<PluginWithUpdate[]>(
+      `/api/servers/${activeServerId}/plugins/check-updates`,
+      undefined,
+      'Failed to check updates'
+    );
 
     // Merge update info into current list and keep a sticky map so actions remain visible
     setPlugins(prev => prev.map(plugin => {
@@ -190,7 +194,7 @@ export const PluginsPage = () => {
 
     setUpdatesChecked(true);
     setLastCheckedAt(new Date());
-    return results as PluginWithUpdate[];
+    return results;
   }, [activeServerId]);
 
   // Restart handled manually by user after updates.
@@ -220,10 +224,11 @@ export const PluginsPage = () => {
         });
       },
       onCommit: async () => {
-        const res = await fetch(`/api/servers/${activeServer.id}/plugins/${encodeURIComponent(fileName)}`, {
-          method: 'DELETE',
-        });
-        if (!res.ok) throw new Error(`Failed to delete ${itemLabel}`);
+        await apiRequest(
+          `/api/servers/${activeServer.id}/plugins/${encodeURIComponent(fileName)}`,
+          { method: 'DELETE' },
+          `Failed to delete ${itemLabel}`
+        );
         setPendingDeletedPluginFiles((prev) => {
           const next = new Set(prev);
           next.delete(fileName);
@@ -237,14 +242,15 @@ export const PluginsPage = () => {
   const handleToggle = async (fileName: string) => {
     if (!activeServer) return;
     try {
-      const res = await fetch(`/api/servers/${activeServer.id}/plugins/${encodeURIComponent(fileName)}/toggle`, {
-        method: 'PUT',
-      });
-      if (!res.ok) throw new Error(`Failed to toggle ${itemLabel}`);
+      await apiRequest(
+        `/api/servers/${activeServer.id}/plugins/${encodeURIComponent(fileName)}/toggle`,
+        { method: 'PUT' },
+        `Failed to toggle ${itemLabel}`
+      );
       toast.success(`${itemLabelCap} state changed. Restart server to apply.`);
       fetchPlugins();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : `Failed to toggle ${itemLabel}`);
+      toast.error(toErrorMessage(err, `Failed to toggle ${itemLabel}`));
     }
   };
 
@@ -258,14 +264,17 @@ export const PluginsPage = () => {
         return;
       }
       for (const p of toDisable) {
-        const res = await fetch(`/api/servers/${activeServer.id}/plugins/${encodeURIComponent(p.fileName)}/toggle`, { method: 'PUT' });
-        if (!res.ok) throw new Error(`Failed to disable ${p.fileName}`);
+        await apiRequest(
+          `/api/servers/${activeServer.id}/plugins/${encodeURIComponent(p.fileName)}/toggle`,
+          { method: 'PUT' },
+          `Failed to disable ${p.fileName}`
+        );
       }
       toast.success(`Disabled ${toDisable.length} ${toDisable.length === 1 ? itemLabel : itemLabelPlural}`);
       setSelectedPlugins(new Set());
       fetchPlugins();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to disable selected');
+      toast.error(toErrorMessage(err, 'Failed to disable selected'));
     } finally {
       setUpdatingAll(false);
     }
@@ -293,8 +302,11 @@ export const PluginsPage = () => {
       },
       onCommit: async () => {
         for (const name of names) {
-          const res = await fetch(`/api/servers/${activeServer.id}/plugins/${encodeURIComponent(name)}`, { method: 'DELETE' });
-          if (!res.ok) throw new Error(`Failed to delete ${name}`);
+          await apiRequest<void>(
+            `/api/servers/${activeServer.id}/plugins/${encodeURIComponent(name)}`,
+            { method: 'DELETE' },
+            `Failed to delete ${name}`
+          );
         }
         setPendingDeletedPluginFiles((prev) => {
           const next = new Set(prev);
@@ -402,7 +414,7 @@ export const PluginsPage = () => {
       if (err instanceof DuplicateInstalledError) {
         return;
       }
-      toast.error(err instanceof Error ? err.message : 'Couldn’t upload file. Try again.');
+      toast.error(toErrorMessage(err, 'Couldn’t upload file. Try again.'));
     } finally {
       if (uploadConflictResolverRef.current) {
         uploadConflictResolverRef.current('skip');
@@ -420,10 +432,22 @@ export const PluginsPage = () => {
       await fetchUpdateResults();
       toast.success('Update check complete');
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to check updates');
+      toast.error(toErrorMessage(err, 'Failed to check updates'));
     } finally {
       setCheckingUpdates(false);
     }
+  };
+
+  const sendPluginUpdate = async (serverID: string, fileName: string, url: string) => {
+    await apiRequest(
+      `/api/servers/${serverID}/plugins/${encodeURIComponent(fileName)}/update`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      },
+      'Failed to update plugin'
+    );
   };
 
   const runSingleUpdate = async (plugin: PluginWithUpdate) => {
@@ -431,16 +455,7 @@ export const PluginsPage = () => {
     setUpdatingPlugin(plugin.fileName);
     toast.info(`Updating ${itemLabel}`);
     try {
-      const res = await fetch(`/api/servers/${activeServer.id}/plugins/${encodeURIComponent(plugin.fileName)}/update`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: plugin.updateUrl }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to update plugin');
-      }
-      await res.json().catch(() => ({}));
+      await sendPluginUpdate(activeServer.id, plugin.fileName, plugin.updateUrl);
       setStickyUpdates(prev => {
         const next = { ...prev };
         delete next[plugin.fileName];
@@ -449,7 +464,7 @@ export const PluginsPage = () => {
       notifyUpdateComplete();
       fetchPlugins();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update plugin');
+      toast.error(toErrorMessage(err, 'Failed to update plugin'));
     } finally {
       setUpdatingPlugin(null);
       setPendingUpdate(null);
@@ -525,15 +540,7 @@ export const PluginsPage = () => {
       let updatedCount = 0;
       for (const plugin of outdated) {
         try {
-          const res = await fetch(`/api/servers/${activeServer.id}/plugins/${encodeURIComponent(plugin.fileName)}/update`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: plugin.updateUrl }),
-          });
-          if (!res.ok) {
-            const data = await res.json().catch(() => ({}));
-            throw new Error(data.error || 'Failed to update plugin');
-          }
+          await sendPluginUpdate(activeServer.id, plugin.fileName, plugin.updateUrl!);
           updatedCount += 1;
           setStickyUpdates(prev => {
             const next = { ...prev };
@@ -555,7 +562,7 @@ export const PluginsPage = () => {
       setSelectedPlugins(new Set());
       fetchPlugins();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : `Failed to update ${itemLabelPlural}`);
+      toast.error(toErrorMessage(err, `Failed to update ${itemLabelPlural}`));
     } finally {
       setUpdatingAll(false);
     }
@@ -596,7 +603,7 @@ export const PluginsPage = () => {
         await fetchUpdateResults();
         toast.success('Update check complete');
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'Failed to check updates');
+        toast.error(toErrorMessage(err, 'Failed to check updates'));
       } finally {
         setCheckingUpdates(false);
       }
@@ -624,12 +631,7 @@ export const PluginsPage = () => {
       let updatedCount = 0;
       for (const plugin of selectedOutdated) {
         try {
-          const res = await fetch(`/api/servers/${activeServer.id}/plugins/${encodeURIComponent(plugin.fileName)}/update`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: plugin.updateUrl }),
-          });
-          if (!res.ok) throw new Error('Failed');
+          await sendPluginUpdate(activeServer.id, plugin.fileName, plugin.updateUrl!);
           updatedCount += 1;
           setStickyUpdates(prev => {
             const next = { ...prev };
@@ -649,7 +651,7 @@ export const PluginsPage = () => {
       setSelectedPlugins(new Set());
       fetchPlugins();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : `Failed to update ${itemLabelPlural}`);
+      toast.error(toErrorMessage(err, `Failed to update ${itemLabelPlural}`));
     } finally {
       setUpdatingAll(false);
     }
@@ -674,15 +676,15 @@ export const PluginsPage = () => {
 
     setSavingSourceFor(pendingSource.fileName);
     try {
-      const res = await fetch(`/api/servers/${activeServer.id}/plugins/${encodeURIComponent(pendingSource.fileName)}/source`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: pendingSource.url }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to save source link');
-      }
+      await apiRequest(
+        `/api/servers/${activeServer.id}/plugins/${encodeURIComponent(pendingSource.fileName)}/source`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: pendingSource.url }),
+        },
+        'Failed to save source link'
+      );
 
       toast.success('Source link saved');
       setSourceDrafts(prev => {
@@ -699,7 +701,7 @@ export const PluginsPage = () => {
       setPendingSource(null);
       fetchPlugins();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save source link');
+      toast.error(toErrorMessage(err, 'Failed to save source link'));
     } finally {
       setSavingSourceFor(null);
     }

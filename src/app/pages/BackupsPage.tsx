@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import clsx from 'clsx';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { useStagedDeleteUndo } from '../hooks/useStagedDeleteUndo';
+import { apiRequest, toErrorMessage } from '../lib/api';
 
 export const BackupsPage = () => {
   const { activeServer } = useServer();
@@ -28,12 +29,14 @@ export const BackupsPage = () => {
   const fetchBackups = useCallback(async () => {
     if (!activeServer) return;
     try {
-      const res = await fetch(`/api/servers/${activeServer.id}/backups`);
-      if (!res.ok) throw new Error('Failed to fetch backups');
-      const data: Backup[] = await res.json();
+      const data = await apiRequest<Backup[]>(
+        `/api/servers/${activeServer.id}/backups`,
+        undefined,
+        'Failed to fetch backups'
+      );
       setBackups(data);
     } catch (err) {
-      console.error('Failed to fetch backups:', err);
+      console.error(toErrorMessage(err, 'Failed to fetch backups'));
     } finally {
       setLoading(false);
     }
@@ -47,15 +50,11 @@ export const BackupsPage = () => {
     if (!activeServer) return;
     setCreating(true);
     try {
-      const res = await fetch(`/api/servers/${activeServer.id}/backups`, { method: 'POST' });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to create backup');
-      }
+      await apiRequest(`/api/servers/${activeServer.id}/backups`, { method: 'POST' }, 'Failed to create backup');
       toast.success('Backup created successfully');
       fetchBackups();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Backup failed');
+      toast.error(toErrorMessage(err, 'Backup failed'));
     } finally {
       setCreating(false);
     }
@@ -87,10 +86,11 @@ export const BackupsPage = () => {
         });
       },
       onCommit: async () => {
-        const res = await fetch(`/api/servers/${activeServer.id}/backups/${encodeURIComponent(name)}`, {
-          method: 'DELETE',
-        });
-        if (!res.ok) throw new Error('Failed to delete backup');
+        await apiRequest(
+          `/api/servers/${activeServer.id}/backups/${encodeURIComponent(name)}`,
+          { method: 'DELETE' },
+          'Failed to delete backup'
+        );
         setPendingDeletedBackups((prev) => {
           const next = new Set(prev);
           next.delete(name);
@@ -105,17 +105,15 @@ export const BackupsPage = () => {
     if (!activeServer) return;
     setRestoring(true);
     try {
-      const res = await fetch(`/api/servers/${activeServer.id}/backups/${encodeURIComponent(name)}/restore`, {
-        method: 'POST',
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to restore backup');
-      }
+      await apiRequest(
+        `/api/servers/${activeServer.id}/backups/${encodeURIComponent(name)}/restore`,
+        { method: 'POST' },
+        'Failed to restore backup'
+      );
       toast.success('Backup restored successfully');
       setRestoreTarget(null);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to restore');
+      toast.error(toErrorMessage(err, 'Failed to restore'));
     } finally {
       setRestoring(false);
     }
@@ -129,9 +127,11 @@ export const BackupsPage = () => {
   const fetchSchedule = useCallback(async () => {
     if (!activeServer) return;
     try {
-      const res = await fetch(`/api/servers/${activeServer.id}/backup-schedule`);
-      if (!res.ok) return;
-      const data = await res.json();
+      const data = await apiRequest<{ schedule?: string; nextBackup?: string | null }>(
+        `/api/servers/${activeServer.id}/backup-schedule`,
+        undefined,
+        'Failed to fetch backup schedule'
+      );
       setCurrentSchedule(data.schedule || '');
       setNextBackup(data.nextBackup || null);
     } catch { /* ignore */ }
@@ -154,13 +154,15 @@ export const BackupsPage = () => {
   const handleSaveSchedule = async () => {
     if (!activeServer) return;
     try {
-      const res = await fetch(`/api/servers/${activeServer.id}/backup-schedule`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ schedule: selectedSchedule }),
-      });
-      if (!res.ok) throw new Error('Failed to update schedule');
-      const data = await res.json();
+      const data = await apiRequest<{ nextBackup?: string | null }>(
+        `/api/servers/${activeServer.id}/backup-schedule`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ schedule: selectedSchedule }),
+        },
+        'Failed to update schedule'
+      );
       setCurrentSchedule(selectedSchedule);
       setNextBackup(data.nextBackup || null);
       setSchedulePopup(false);
@@ -171,7 +173,7 @@ export const BackupsPage = () => {
         toast.success('Scheduled backups disabled');
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to update schedule');
+      toast.error(toErrorMessage(err, 'Failed to update schedule'));
     }
   };
 
@@ -208,8 +210,11 @@ export const BackupsPage = () => {
       },
       onCommit: async () => {
         for (const name of names) {
-          const res = await fetch(`/api/servers/${activeServer.id}/backups/${encodeURIComponent(name)}`, { method: 'DELETE' });
-          if (!res.ok) throw new Error(`Failed to delete ${name}`);
+          await apiRequest<void>(
+            `/api/servers/${activeServer.id}/backups/${encodeURIComponent(name)}`,
+            { method: 'DELETE' },
+            `Failed to delete ${name}`
+          );
         }
         setPendingDeletedBackups((prev) => {
           const next = new Set(prev);

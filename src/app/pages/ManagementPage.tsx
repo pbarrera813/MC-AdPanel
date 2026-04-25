@@ -10,6 +10,7 @@ import { useEscapeKey } from '../hooks/useEscapeKey';
 import { format } from 'date-fns';
 import { Calendar } from '../components/ui/calendar';
 import { Popover, PopoverTrigger, PopoverContent } from '../components/ui/popover';
+import { apiRequest, toErrorMessage } from '../lib/api';
 
 // Sub-components (could be separate files but kept here for now for speed)
 import { ConsoleView } from '../components/management/ConsoleView';
@@ -269,15 +270,15 @@ export const ManagementPage = () => {
     setIsRestartModalOpen(false);
 
     try {
-      const res = await fetch(`/api/servers/${activeServer.id}/schedule-restart`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ delaySeconds }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to schedule restart');
-      }
+      await apiRequest(
+        `/api/servers/${activeServer.id}/schedule-restart`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ delaySeconds }),
+        },
+        'Failed to schedule restart'
+      );
       const labelMap: Record<Exclude<RestartOption, 'custom'>, string> = {
         now: 'now',
         '5m': '5 minutes',
@@ -293,7 +294,7 @@ export const ManagementPage = () => {
           : `Server restart scheduled in ${labelMap[restartOption]}`;
       toast.success(message);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to schedule restart');
+      toast.error(toErrorMessage(err, 'Failed to schedule restart'));
     }
 
     setCustomTime(null);
@@ -331,15 +332,15 @@ export const ManagementPage = () => {
     setIsStopModalOpen(false);
 
     try {
-      const res = await fetch(`/api/servers/${activeServer.id}/schedule-stop`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ delaySeconds }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to schedule stop');
-      }
+      await apiRequest(
+        `/api/servers/${activeServer.id}/schedule-stop`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ delaySeconds }),
+        },
+        'Failed to schedule stop'
+      );
       const labelMap: Record<Exclude<StopOption, 'custom'>, string> = {
         '5m': '5 minutes',
         '30m': '30 minutes',
@@ -352,7 +353,7 @@ export const ManagementPage = () => {
         : `Server stop scheduled in ${labelMap[stopOption]}`;
       toast.success(message);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to schedule stop');
+      toast.error(toErrorMessage(err, 'Failed to schedule stop'));
     }
 
     setCustomStopTime(null);
@@ -363,15 +364,11 @@ export const ManagementPage = () => {
     setIsSafeModeModalOpen(false);
     if (activeServer) {
       try {
-        const res = await fetch(`/api/servers/${activeServer.id}/start-safe`, { method: 'POST' });
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.error || 'Failed to start in safe mode');
-        }
+        await apiRequest(`/api/servers/${activeServer.id}/start-safe`, { method: 'POST' }, 'Failed to start in safe mode');
         toast.info("Starting in Safe Mode (plugins/mods disabled)...");
         await refreshServers();
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'Failed to start server');
+        toast.error(toErrorMessage(err, 'Failed to start server'));
       }
     }
   };
@@ -384,7 +381,7 @@ export const ManagementPage = () => {
           await stopServer(activeServer.id);
           toast.error("Server killed forcefully.");
         } catch (err) {
-          toast.error(err instanceof Error ? err.message : 'Failed to kill server');
+          toast.error(toErrorMessage(err, 'Failed to kill server'));
         }
       }
     }
@@ -409,7 +406,7 @@ export const ManagementPage = () => {
         await stopServer(activeServer.id);
         toast.success('Server stopped. You can now edit settings.');
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'Failed to stop server');
+        toast.error(toErrorMessage(err, 'Failed to stop server'));
       }
     }
   };
@@ -418,24 +415,24 @@ export const ManagementPage = () => {
     if (!activeServer) return;
     setSavingSettings(true);
     try {
-      const res = await fetch(`/api/servers/${activeServer.id}/settings`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          minRam: Math.round((parseFloat(settingsMinRam) || 0.5) * 1024) + 'M',
-          maxRam: Math.round((parseFloat(settingsMaxRam) || 1) * 1024) + 'M',
-          maxPlayers: parseInt(settingsMaxPlayers) || 20,
-          port: parseInt(settingsPort) || 25565,
-        }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Couldn’t save settings. Try again.');
-      }
+      await apiRequest(
+        `/api/servers/${activeServer.id}/settings`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            minRam: Math.round((parseFloat(settingsMinRam) || 0.5) * 1024) + 'M',
+            maxRam: Math.round((parseFloat(settingsMaxRam) || 1) * 1024) + 'M',
+            maxPlayers: parseInt(settingsMaxPlayers) || 20,
+            port: parseInt(settingsPort) || 25565,
+          }),
+        },
+        'Couldn’t save settings. Try again.'
+      );
       toast.success('Settings saved successfully');
       await refreshServers();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Couldn’t save settings. Try again.');
+      toast.error(toErrorMessage(err, 'Couldn’t save settings. Try again.'));
     } finally {
       setSavingSettings(false);
     }
@@ -495,7 +492,7 @@ export const ManagementPage = () => {
              <button
                onClick={async () => {
                  try { await startServer(activeServer.id); toast.success('Server starting...'); }
-                 catch (err) { toast.error(err instanceof Error ? err.message : 'Failed to start'); }
+                 catch (err) { toast.error(toErrorMessage(err, 'Failed to start')); }
                }}
                className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded font-bold shadow-lg shadow-green-900/20 transition-all active:scale-95"
              >
@@ -506,7 +503,7 @@ export const ManagementPage = () => {
 	               <button
 	                 onClick={async () => {
 	                   try { await stopServer(activeServer.id); toast.success('Server stopping...'); }
-	                   catch (err) { toast.error(err instanceof Error ? err.message : 'Failed to stop'); }
+	                   catch (err) { toast.error(toErrorMessage(err, 'Failed to stop')); }
 	                 }}
                  className="flex items-center gap-2 px-4 py-2 bg-[#2a2a29] border border-[#404040] hover:bg-[#333] text-gray-200 rounded font-medium transition-colors"
 	               >

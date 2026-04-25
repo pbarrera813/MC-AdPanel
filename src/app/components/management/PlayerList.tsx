@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import clsx from 'clsx';
 import { motion } from 'motion/react';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip';
+import { apiRequest, toErrorMessage } from '../../lib/api';
 
 interface PlayerListProps {
   server: Server;
@@ -22,9 +23,11 @@ export const PlayerList = ({ server }: PlayerListProps) => {
     let mounted = true;
     const loadPollSettings = async () => {
       try {
-        const res = await fetch('/api/settings');
-        if (!res.ok) return;
-        const data = await res.json();
+        const data = await apiRequest<{ playerSyncInterval?: number; statusPollInterval?: number }>(
+          '/api/settings',
+          undefined,
+          'Failed to load settings'
+        );
         const uiPollSeconds = Math.max(
           2,
           Number(data.playerSyncInterval || 0) || Number(data.statusPollInterval || 0) || 3
@@ -44,9 +47,11 @@ export const PlayerList = ({ server }: PlayerListProps) => {
 
   const fetchPlayers = useCallback(async () => {
     try {
-      const res = await fetch(`/api/servers/${server.id}/players`);
-      if (!res.ok) throw new Error('Failed to fetch players');
-      const data = await res.json();
+      const data = await apiRequest<{ players?: Player[]; pingSupported?: boolean; pingStatus?: string; dataStale?: boolean } | Player[]>(
+        `/api/servers/${server.id}/players`,
+        undefined,
+        'Failed to fetch players'
+      );
       if (Array.isArray(data)) {
         setPlayers(data);
         setPingStatus('supported');
@@ -65,7 +70,7 @@ export const PlayerList = ({ server }: PlayerListProps) => {
         }
       }
     } catch (err) {
-      console.error('Failed to fetch players:', err);
+      console.error(toErrorMessage(err, 'Failed to fetch players'));
     } finally {
       setLoading(false);
     }
@@ -112,20 +117,20 @@ export const PlayerList = ({ server }: PlayerListProps) => {
 
   const handleAction = async (playerName: string, action: 'kick' | 'ban' | 'kill') => {
     try {
-      const res = await fetch(`/api/servers/${server.id}/players/${encodeURIComponent(playerName)}/${action}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || `Failed to ${action} player`);
-      }
+      await apiRequest(
+        `/api/servers/${server.id}/players/${encodeURIComponent(playerName)}/${action}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        },
+        `Failed to ${action} player`
+      );
       const labels = { kick: 'Kicked', ban: 'Banned', kill: 'Killed' };
       toast.success(`${labels[action]} ${playerName}`);
       setTimeout(fetchPlayers, 1000);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : `Failed to ${action} player`);
+      toast.error(toErrorMessage(err, `Failed to ${action} player`));
     }
   };
 
