@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import { apiRequest, toErrorMessage } from '../lib/api';
 
 export type ServerStatus = 'Running' | 'Stopped' | 'Crashed' | 'Booting' | 'Installing' | 'Error';
 export type ServerType = 'Vanilla' | 'Spigot' | 'Paper' | 'Folia' | 'Purpur' | 'Velocity' | 'Forge' | 'Fabric' | 'NeoForge';
@@ -96,8 +97,7 @@ export const ServerProvider = ({ children }: { children: ReactNode }) => {
 
   // Load poll interval from settings
   useEffect(() => {
-    fetch(`${API_BASE}/api/settings`)
-      .then(res => res.json())
+    apiRequest<{ statusPollInterval?: number }>(`${API_BASE}/api/settings`)
       .then(data => {
         if (data.statusPollInterval && data.statusPollInterval > 0) {
           setPollInterval(data.statusPollInterval * 1000);
@@ -109,13 +109,11 @@ export const ServerProvider = ({ children }: { children: ReactNode }) => {
   // Fetch all servers from API
   const refreshServers = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/servers`);
-      if (!res.ok) throw new Error('Failed to fetch servers');
-      const data: Server[] = await res.json();
+      const data = await apiRequest<Server[]>(`${API_BASE}/api/servers`, undefined, 'Failed to fetch servers');
       setServers(data);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
+      setError(toErrorMessage(err, 'Unknown error'));
     } finally {
       setLoading(false);
     }
@@ -130,35 +128,23 @@ export const ServerProvider = ({ children }: { children: ReactNode }) => {
 
   // Create a new server via API
   const addServer = async (newServer: Omit<Server, 'id' | 'cpu' | 'ram' | 'status' | 'autoStart' | 'installError'>) => {
-    const res = await fetch(`${API_BASE}/api/servers`, {
+    await apiRequest(`${API_BASE}/api/servers`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(newServer),
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || 'Failed to create server');
-    }
+    }, 'Failed to create server');
     await refreshServers();
   };
 
   // Start a server via API
   const startServer = async (id: string) => {
-    const res = await fetch(`${API_BASE}/api/servers/${id}/start`, { method: 'POST' });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || 'Failed to start server');
-    }
+    await apiRequest(`${API_BASE}/api/servers/${id}/start`, { method: 'POST' }, 'Failed to start server');
     await refreshServers();
   };
 
   // Stop a server via API
   const stopServer = async (id: string) => {
-    const res = await fetch(`${API_BASE}/api/servers/${id}/stop`, { method: 'POST' });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || 'Failed to stop server');
-    }
+    await apiRequest(`${API_BASE}/api/servers/${id}/stop`, { method: 'POST' }, 'Failed to stop server');
     await refreshServers();
   };
 
@@ -171,15 +157,15 @@ export const ServerProvider = ({ children }: { children: ReactNode }) => {
       return [...ordered, ...missing];
     });
 
-    const res = await fetch(`${API_BASE}/api/servers/order`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orderedIds: normalized }),
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
+    try {
+      await apiRequest(`${API_BASE}/api/servers/order`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderedIds: normalized }),
+      }, 'Failed to save server order');
+    } catch (err) {
       await refreshServers();
-      throw new Error(data.error || 'Failed to save server order');
+      throw new Error(toErrorMessage(err, 'Failed to save server order'));
     }
   };
 
