@@ -36,7 +36,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o orexa-panel .
 # ============================================================
 # Stage 3: Runtime image with Java for Minecraft servers
 # ============================================================
-FROM eclipse-temurin:21-jre-jammy
+FROM eclipse-temurin:21-jdk-jammy
 
 LABEL maintainer="Orexa Panel"
 LABEL description="Minecraft server administration panel"
@@ -79,4 +79,3 @@ ENV ADPANEL_DIR=/AdPanel
 
 # Entrypoint fixes volume ownership then runs as mcpanel via gosu
 ENTRYPOINT ["/AdPanel/entrypoint.sh"]
-
