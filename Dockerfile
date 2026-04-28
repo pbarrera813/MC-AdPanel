@@ -36,6 +36,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o orexa-panel .
 # ============================================================
 # Stage 3: Runtime image with Java for Minecraft servers
 # ============================================================
+FROM eclipse-temurin:17-jdk-jammy AS jdk17
+FROM eclipse-temurin:25-jdk-jammy AS jdk25
+
 FROM eclipse-temurin:21-jdk-jammy
 
 LABEL maintainer="Orexa Panel"
@@ -58,6 +61,12 @@ COPY --from=backend --chown=mcpanel:mcpanel /build/orexa-panel /AdPanel/orexa-pa
 
 # Copy the built React frontend
 COPY --from=frontend --chown=mcpanel:mcpanel /build/dist /AdPanel/dist
+
+# Bundle additional JDK runtimes for automatic version compatibility.
+COPY --from=jdk17 /opt/java/openjdk /opt/jdks/jdk17
+COPY --from=jdk25 /opt/java/openjdk /opt/jdks/jdk25
+RUN cp -R /opt/java/openjdk /opt/jdks/jdk21 && \
+    chown -R mcpanel:mcpanel /opt/jdks
 
 # Copy entrypoint script (runs as root to fix volume ownership, then drops to mcpanel)
 COPY entrypoint.sh /AdPanel/entrypoint.sh

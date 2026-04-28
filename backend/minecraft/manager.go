@@ -182,6 +182,17 @@ func clearScheduledActionsLocked(rs *runningServer) {
 	rs.stopAt = time.Time{}
 }
 
+func resetStoppedRuntimeStateLocked(rs *runningServer) {
+	rs.status = "Stopped"
+	rs.cpu = 0
+	rs.ram = 0
+	rs.ramBytes = 0
+	rs.tps = 0
+	rs.pid = 0
+	rs.players = make(map[string]*onlinePlayer)
+	clearScheduledActionsLocked(rs)
+}
+
 func (m *Manager) executeRestart(id string, cfg *ServerConfig) {
 	log.Printf("[%s] Scheduled restart executing", cfg.Name)
 	m.SendCommand(id, "say Server restarting now!")
@@ -298,6 +309,7 @@ type Manager struct {
 	hostTotalRAMBytes  uint64
 	usageMu            sync.RWMutex
 	systemUsage        SystemUsageSnapshot
+	javaResolver       *javaRequirementResolver
 	mu                 sync.RWMutex
 }
 
@@ -763,7 +775,9 @@ func NewManager(baseDir string) (*Manager, error) {
 		stopScheduler:      make(chan struct{}),
 		stopUsageSampler:   make(chan struct{}),
 		stopImportCleanup:  make(chan struct{}),
+		javaResolver:       newJavaRequirementResolver(),
 	}
+	log.Printf("Java runtimes detected: %v", mgr.javaResolver.availableMajors())
 	mgr.loadHostUsageMetadata()
 
 	if err := mgr.load(); err != nil {
@@ -1044,25 +1058,22 @@ func (m *Manager) CreateServer(name, serverType, version string, port int, minRA
 		return nil, fmt.Errorf("failed to create server directory: %w", err)
 	}
 
-	// Create standard subdirectories (only for plugin-based servers)
-	if !isModdedType(serverType) {
-		os.MkdirAll(filepath.Join(serverDir, "plugins"), 0755)
-	}
-
 	// Write eula.txt
 	eulaPath := filepath.Join(serverDir, "eula.txt")
 	if err := os.WriteFile(eulaPath, []byte("eula=true\n"), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write eula.txt: %w", err)
 	}
 
-	// Write server.properties
-	props := fmt.Sprintf(
-		"server-port=%d\nmotd=A Minecraft Server\nmax-players=%d\nonline-mode=true\nview-distance=10\n",
-		port, maxPlayers,
-	)
-	propsPath := filepath.Join(serverDir, "server.properties")
-	if err := os.WriteFile(propsPath, []byte(props), 0644); err != nil {
-		return nil, fmt.Errorf("failed to write server.properties: %w", err)
+	// Write server.properties for gameplay servers. Proxy servers use velocity.toml.
+	if !isProxyType(serverType) {
+		props := fmt.Sprintf(
+			"server-port=%d\nmotd=A Minecraft Server\nmax-players=%d\nonline-mode=true\nview-distance=10\n",
+			port, maxPlayers,
+		)
+		propsPath := filepath.Join(serverDir, "server.properties")
+		if err := os.WriteFile(propsPath, []byte(props), 0644); err != nil {
+			return nil, fmt.Errorf("failed to write server.properties: %w", err)
+		}
 	}
 
 	cfg := &ServerConfig{
@@ -1203,6 +1214,12 @@ func (m *Manager) StartServer(id string) error {
 
 	// Determine start command
 	var cmd *exec.Cmd
+	javaExec, javaRequired, javaSelected, javaErr := m.javaResolver.resolve(cfg.Type, cfg.Version)
+	if javaErr != nil {
+		rs.mu.Unlock()
+		return fmt.Errorf("cannot start server due to Java compatibility: %w", javaErr)
+	}
+	log.Printf("[%s] Java selected: required=%d selected=%d exec=%s", cfg.Name, javaRequired, javaSelected, javaExec)
 	if len(cfg.StartCommand) > 0 {
 		// For StartCommand-based servers (e.g. Forge/NeoForge), keep user_jvm_args.txt
 		// in sync with selected preset while avoiding unnecessary rewrites.
@@ -1212,6 +1229,8 @@ func (m *Manager) StartServer(id string) error {
 			log.Printf("[%s] Failed to write user_jvm_args.txt: %v", cfg.Name, err)
 		}
 		cmd = exec.Command(cfg.StartCommand[0], cfg.StartCommand[1:]...)
+		javaHome := filepath.Clean(filepath.Join(filepath.Dir(javaExec), ".."))
+		cmd.Env = append(os.Environ(), "JAVA_HOME="+javaHome, "PATH="+filepath.Dir(javaExec)+":"+os.Getenv("PATH"))
 	} else {
 		jarPath := filepath.Join(cfg.Dir, cfg.JarFile)
 		if _, err := os.Stat(jarPath); os.IsNotExist(err) {
@@ -1224,8 +1243,9 @@ func (m *Manager) StartServer(id string) error {
 		}
 		jvmArgs = append(jvmArgs, buildJVMFlags(cfg.Flags, cfg.AlwaysPreTouch)...)
 		jvmArgs = append(jvmArgs, "-jar", cfg.JarFile, "nogui")
-		cmd = exec.Command("java", jvmArgs...)
+		cmd = exec.Command(javaExec, jvmArgs...)
 	}
+	prepareServerProcessCommand(cmd)
 	cmd.Dir = cfg.Dir
 
 	stdinPipe, err := cmd.StdinPipe()
@@ -1829,15 +1849,55 @@ func (m *Manager) StopServer(id string) error {
 	}
 
 	rs.mu.Lock()
-	rs.status = "Stopped"
-	rs.cpu = 0
-	rs.ram = 0
-	rs.ramBytes = 0
-	rs.pid = 0
-	rs.players = make(map[string]*onlinePlayer)
-	clearScheduledActionsLocked(rs)
+	resetStoppedRuntimeStateLocked(rs)
 	rs.mu.Unlock()
 
+	return nil
+}
+
+// KillServer forcefully terminates a running server process group immediately.
+func (m *Manager) KillServer(id string) error {
+	m.mu.RLock()
+	cfg, err := m.serverConfigForOperationLocked(id)
+	rs, ok := m.running[id]
+	m.mu.RUnlock()
+
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("server %s not found", id)
+	}
+
+	rs.mu.Lock()
+	if rs.status != "Running" && rs.status != "Booting" {
+		rs.mu.Unlock()
+		return fmt.Errorf("server %s is not running (status: %s)", id, rs.status)
+	}
+	cmd := rs.cmd
+	stopMetrics := rs.stopMetrics
+	rs.mu.Unlock()
+
+	if cmd != nil && cmd.Process != nil {
+		if err := killServerProcessTree(cmd.Process.Pid); err != nil {
+			log.Printf("[%s] Failed to kill server process tree (pid=%d): %v", cfg.Name, cmd.Process.Pid, err)
+			return fmt.Errorf("failed to kill server process")
+		}
+	}
+
+	if stopMetrics != nil {
+		select {
+		case <-stopMetrics:
+		default:
+			close(stopMetrics)
+		}
+	}
+
+	rs.mu.Lock()
+	resetStoppedRuntimeStateLocked(rs)
+	rs.mu.Unlock()
+
+	log.Printf("[%s] Server killed forcefully", cfg.Name)
 	return nil
 }
 
@@ -3485,9 +3545,10 @@ func (m *Manager) installServerJar(id, serverType, version string) {
 
 	// Resolve "Latest" to actual version
 	actualVersion := version
+	var versions []VersionInfo
 	if strings.EqualFold(version, "latest") || strings.EqualFold(version, "") {
-		versions, vErr := provider.FetchVersions(context.Background())
-		if vErr != nil || len(versions) == 0 {
+		versions, err = provider.FetchVersions(context.Background())
+		if err != nil || len(versions) == 0 {
 			rs.mu.Lock()
 			rs.status = "Error"
 			rs.installError = "Failed to resolve latest version"
@@ -3503,6 +3564,25 @@ func (m *Manager) installServerJar(id, serverType, version string) {
 		if strings.EqualFold(actualVersion, "latest") || actualVersion == "" {
 			actualVersion = versions[0].Version
 		}
+	} else {
+		versions, err = provider.FetchVersions(context.Background())
+		if err == nil && len(versions) > 0 {
+			found := false
+			for _, v := range versions {
+				if strings.EqualFold(strings.TrimSpace(v.Version), strings.TrimSpace(version)) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				rs.mu.Lock()
+				rs.status = "Error"
+				rs.installError = fmt.Sprintf("Version %s is not available for %s", version, serverType)
+				rs.mu.Unlock()
+				log.Printf("[%s] Install blocked: unavailable version %s for %s", cfg.Name, version, serverType)
+				return
+			}
+		}
 	}
 
 	progressFn := func(msg string) {
@@ -3514,7 +3594,18 @@ func (m *Manager) installServerJar(id, serverType, version string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	err = provider.DownloadJar(ctx, actualVersion, cfg.Dir, progressFn)
+	javaExec, javaRequired, javaSelected, javaErr := m.javaResolver.resolve(serverType, actualVersion)
+	if javaErr != nil {
+		rs.mu.Lock()
+		rs.status = "Error"
+		rs.installError = fmt.Sprintf("Java compatibility error: %v", javaErr)
+		rs.mu.Unlock()
+		log.Printf("[%s] Install blocked by Java compatibility: %v", cfg.Name, javaErr)
+		return
+	}
+	log.Printf("[%s] Java selected for install: required=%d selected=%d exec=%s", cfg.Name, javaRequired, javaSelected, javaExec)
+
+	err = provider.DownloadJar(ctx, actualVersion, cfg.Dir, javaExec, progressFn)
 	if err != nil {
 		rs.mu.Lock()
 		rs.status = "Error"

@@ -100,6 +100,7 @@ func main() {
 	mux.HandleFunc("POST /api/servers/{id}/start", serverHandler.Start)
 	mux.HandleFunc("POST /api/servers/{id}/start-safe", serverHandler.StartSafeMode)
 	mux.HandleFunc("POST /api/servers/{id}/stop", serverHandler.Stop)
+	mux.HandleFunc("POST /api/servers/{id}/kill", serverHandler.Kill)
 	mux.HandleFunc("GET /api/servers/{id}/status", serverHandler.Status)
 	mux.HandleFunc("POST /api/servers/{id}/schedule-restart", serverHandler.ScheduleRestart)
 	mux.HandleFunc("DELETE /api/servers/{id}/schedule-restart", serverHandler.CancelRestart)

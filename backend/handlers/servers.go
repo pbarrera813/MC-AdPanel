@@ -180,6 +180,28 @@ func (h *ServerHandler) Stop(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, status)
 }
 
+// Kill handles POST /api/servers/{id}/kill
+func (h *ServerHandler) Kill(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		respondError(w, http.StatusBadRequest, "Server ID is required")
+		return
+	}
+
+	if err := h.mgr.KillServer(id); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	status, err := h.mgr.GetStatus(id)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, status)
+}
+
 // Status handles GET /api/servers/{id}/status
 func (h *ServerHandler) Status(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")

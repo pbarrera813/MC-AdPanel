@@ -25,7 +25,7 @@ type VersionInfo struct {
 // JarProvider defines the interface for downloading server jars
 type JarProvider interface {
 	FetchVersions(ctx context.Context) ([]VersionInfo, error)
-	DownloadJar(ctx context.Context, version string, destDir string, progressFn func(string)) error
+	DownloadJar(ctx context.Context, version string, destDir string, javaExec string, progressFn func(string)) error
 }
 
 // ---------------------------------------------------------------------------
@@ -265,7 +265,8 @@ func (p *PaperMCProvider) FetchVersions(ctx context.Context) ([]VersionInfo, err
 	return versions, nil
 }
 
-func (p *PaperMCProvider) DownloadJar(ctx context.Context, version string, destDir string, progressFn func(string)) error {
+func (p *PaperMCProvider) DownloadJar(ctx context.Context, version string, destDir string, javaExec string, progressFn func(string)) error {
+	_ = javaExec
 	resolved, err := resolveLatest(ctx, p, version)
 	if err != nil {
 		return err
@@ -351,7 +352,8 @@ func (p *PurpurProvider) FetchVersions(ctx context.Context) ([]VersionInfo, erro
 	return versions, nil
 }
 
-func (p *PurpurProvider) DownloadJar(ctx context.Context, version string, destDir string, progressFn func(string)) error {
+func (p *PurpurProvider) DownloadJar(ctx context.Context, version string, destDir string, javaExec string, progressFn func(string)) error {
+	_ = javaExec
 	resolved, err := resolveLatest(ctx, p, version)
 	if err != nil {
 		return err
@@ -407,7 +409,8 @@ func (p *FabricProvider) FetchVersions(ctx context.Context) ([]VersionInfo, erro
 	return versions, nil
 }
 
-func (p *FabricProvider) DownloadJar(ctx context.Context, version string, destDir string, progressFn func(string)) error {
+func (p *FabricProvider) DownloadJar(ctx context.Context, version string, destDir string, javaExec string, progressFn func(string)) error {
+	_ = javaExec
 	resolved, err := resolveLatest(ctx, p, version)
 	if err != nil {
 		return err
@@ -510,7 +513,7 @@ func (p *ForgeProvider) FetchVersions(ctx context.Context) ([]VersionInfo, error
 	return versions, nil
 }
 
-func (p *ForgeProvider) DownloadJar(ctx context.Context, version string, destDir string, progressFn func(string)) error {
+func (p *ForgeProvider) DownloadJar(ctx context.Context, version string, destDir string, javaExec string, progressFn func(string)) error {
 	resolved, err := resolveLatest(ctx, p, version)
 	if err != nil {
 		return err
@@ -554,7 +557,10 @@ func (p *ForgeProvider) DownloadJar(ctx context.Context, version string, destDir
 		progressFn("Running Forge installer (this may take a few minutes)...")
 	}
 
-	cmd := exec.CommandContext(ctx, "java", "-jar", "forge-installer.jar", "--installServer")
+	if strings.TrimSpace(javaExec) == "" {
+		javaExec = "java"
+	}
+	cmd := exec.CommandContext(ctx, javaExec, "-jar", "forge-installer.jar", "--installServer")
 	cmd.Dir = destDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -621,7 +627,7 @@ func (p *NeoForgeProvider) FetchVersions(ctx context.Context) ([]VersionInfo, er
 	return versions, nil
 }
 
-func (p *NeoForgeProvider) DownloadJar(ctx context.Context, version string, destDir string, progressFn func(string)) error {
+func (p *NeoForgeProvider) DownloadJar(ctx context.Context, version string, destDir string, javaExec string, progressFn func(string)) error {
 	resolved, err := resolveLatest(ctx, p, version)
 	if err != nil {
 		return err
@@ -677,7 +683,10 @@ func (p *NeoForgeProvider) DownloadJar(ctx context.Context, version string, dest
 		progressFn("Running NeoForge installer (this may take a few minutes)...")
 	}
 
-	cmd := exec.CommandContext(ctx, "java", "-jar", "neoforge-installer.jar", "--installServer")
+	if strings.TrimSpace(javaExec) == "" {
+		javaExec = "java"
+	}
+	cmd := exec.CommandContext(ctx, javaExec, "-jar", "neoforge-installer.jar", "--installServer")
 	cmd.Dir = destDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -707,7 +716,7 @@ func (p *SpigotProvider) FetchVersions(ctx context.Context) ([]VersionInfo, erro
 	return paperProvider.FetchVersions(ctx)
 }
 
-func (p *SpigotProvider) DownloadJar(ctx context.Context, version string, destDir string, progressFn func(string)) error {
+func (p *SpigotProvider) DownloadJar(ctx context.Context, version string, destDir string, javaExec string, progressFn func(string)) error {
 	resolved, err := resolveLatest(ctx, p, version)
 	if err != nil {
 		return err
@@ -730,7 +739,10 @@ func (p *SpigotProvider) DownloadJar(ctx context.Context, version string, destDi
 		progressFn(fmt.Sprintf("Building Spigot %s with BuildTools (this takes 10-15 minutes)...", resolved))
 	}
 
-	cmd := exec.CommandContext(ctx, "java", "-jar", "BuildTools.jar", "--rev", resolved)
+	if strings.TrimSpace(javaExec) == "" {
+		javaExec = "java"
+	}
+	cmd := exec.CommandContext(ctx, javaExec, "-jar", "BuildTools.jar", "--rev", resolved)
 	cmd.Dir = destDir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -813,6 +825,9 @@ type mojangVersionManifest struct {
 }
 
 type mojangVersionMeta struct {
+	JavaVersion struct {
+		MajorVersion int `json:"majorVersion"`
+	} `json:"javaVersion"`
 	Downloads struct {
 		Server struct {
 			URL string `json:"url"`
@@ -852,7 +867,8 @@ func (p *VanillaProvider) FetchVersions(ctx context.Context) ([]VersionInfo, err
 	return versions, nil
 }
 
-func (p *VanillaProvider) DownloadJar(ctx context.Context, version string, destDir string, progressFn func(string)) error {
+func (p *VanillaProvider) DownloadJar(ctx context.Context, version string, destDir string, javaExec string, progressFn func(string)) error {
+	_ = javaExec
 	resolved, err := resolveLatest(ctx, p, version)
 	if err != nil {
 		return err
