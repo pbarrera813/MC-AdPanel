@@ -21,7 +21,7 @@ func (s *stubJarProvider) FetchVersions(ctx context.Context) ([]VersionInfo, err
 	return append([]VersionInfo(nil), s.versions...), nil
 }
 
-func (s *stubJarProvider) DownloadJar(ctx context.Context, version string, destDir string, progressFn func(string)) error {
+func (s *stubJarProvider) DownloadJar(ctx context.Context, version string, destDir string, javaExec string, progressFn func(string)) error {
 	return nil
 }
 
