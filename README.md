@@ -1,8 +1,7 @@
 ﻿<h1><img src="public/icon.png" alt="Orexa Panel icon" width="34" /> Orexa Panel v1.0.1</h1>
 
-Orexa Panel is a self-hosted Minecraft server panel built around one idea: plug and play.
-Download it, open it, and start creating and managing servers from one place.
-Core administration features are available without paywalls, hidden tiers, or lock-in.
+Orexa Panel is a self-hosted Minecraft server panel built around the simple idea: plug and play
+Just download it, open it, and start creating and managing servers from one place, without putting any feature behind a paywall or tier, just download, run the docker command and start going crazy.
 
 ![Go](https://img.shields.io/badge/Go-1.22-00ADD8?logo=go&logoColor=white)
 ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
@@ -40,14 +39,14 @@ Default first login:
 
 If default credentials are still active, login is allowed but protected actions are gated until the password is changed.
 
-### Manual Build (optional)
+### Manual Build (optional, really just run the docker command)
 
 Requirements:
 
 - Linux
 - Go 1.22+
 - Node.js 20+
-- Java 17+
+- Docker image includes bundled JDK runtimes (17/21/25) with automatic selection per server type/version to avoid problems when creating servers.
 
 Build frontend:
 
@@ -69,11 +68,14 @@ go build -o orexa-panel .
 
 - Multi-server lifecycle control: start, stop, kill, safe start, and delete.
 - Supported server types: Vanilla, Paper, Spigot, Purpur, Folia, Fabric, Forge, NeoForge, and Velocity.
-- Import existing servers from `.zip` or `.tar.gz` archives with analyze/confirm flow and editable pre-import metadata.
+- Import existing servers from `.zip` or `.tar.gz` files with analyze/confirm flow and editable pre-import metadata.
 - Clone servers with per-section options (worlds, plugins/mods, configs).
 - Scheduled restart and scheduled stop.
 - Auto-start toggle and retry install support.
-- Velocity-aware settings behavior for proxy instances.
+- Velocity-aware settings compatible too.
+- Persistent custom server card ordering.
+- Desktop right-click context menu for quick server actions.
+- Mobile long-press drag reorder for server cards.
 
 ### Monitoring and Console
 
@@ -133,7 +135,7 @@ Orexa works with defaults. If you need extra control, use environment variables:
 | `ADPANEL_TRUSTED_PROXIES` | unset | Comma-separated trusted CIDRs/IPs for forwarded header handling. |
 | `ADPANEL_CSRF_MODE` | `enforce` | CSRF policy for unsafe authenticated API methods (`enforce`, `report`, `off`). |
 | `ADPANEL_MAX_UPLOAD_BYTES` | `268435456` | Max request size for file browser and plugin/mod uploads (256 MB). |
-| `ADPANEL_MAX_SERVER_IMPORT_BYTES` | `8589934592` | Max request size for server import archive uploads (8 GB). |
+| `ADPANEL_MAX_SERVER_IMPORT_BYTES` | `8589934592` | Max request size for server import file uploads (8 GB). |
 | `ADPANEL_PLUGIN_UPDATE_ALLOWED_HOSTS` | unset | Extra allowed hosts/domains for plugin/mod update downloads. |
 | `ADPANEL_MAX_PLUGIN_UPDATE_BYTES` | `268435456` | Max download size for plugin/mod update fetches (256 MB). |
 | `ADPANEL_USER_AGENT` | unset | Optional global User-Agent override for upstream fetches. |
@@ -203,6 +205,7 @@ Auth gate and security error codes used by protected routes include:
 | `POST` | `/api/servers/{id}/start` |
 | `POST` | `/api/servers/{id}/start-safe` |
 | `POST` | `/api/servers/{id}/stop` |
+| `POST` | `/api/servers/{id}/kill` |
 | `POST` | `/api/servers/{id}/schedule-restart` |
 | `DELETE` | `/api/servers/{id}/schedule-restart` |
 | `POST` | `/api/servers/{id}/schedule-stop` |
@@ -212,6 +215,7 @@ Auth gate and security error codes used by protected routes include:
 | `PUT` | `/api/servers/{id}/auto-start` |
 | `PUT` | `/api/servers/{id}/flags` |
 | `GET` | `/api/servers/{id}/status` |
+| `PUT` | `/api/servers/order` |
 | `POST` | `/api/servers/clone` |
 | `POST` | `/api/servers/import/analyze` |
 | `POST` | `/api/servers/import/commit` |
