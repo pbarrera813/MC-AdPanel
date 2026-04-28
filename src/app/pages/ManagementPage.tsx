@@ -182,7 +182,7 @@ const DateTimePopover = ({ value, onChange, placeholder = 'dd/mm/yyyy --:--' }: 
 };
 
 export const ManagementPage = () => {
-  const { activeServer, startServer, stopServer, refreshServers } = useServer();
+  const { activeServer, startServer, stopServer, killServer, refreshServers } = useServer();
   const [activeTab, setActiveTab] = useState<Tab>('console');
   const [isLargeScreen, setIsLargeScreen] = useState(true);
   const playersUnsupportedForType = activeServer?.type === 'Velocity';
@@ -378,7 +378,7 @@ export const ManagementPage = () => {
     if (activeServer) {
       if (activeServer.status === 'Running' || activeServer.status === 'Booting') {
         try {
-          await stopServer(activeServer.id);
+          await killServer(activeServer.id);
           toast.error("Server killed forcefully.");
         } catch (err) {
           toast.error(toErrorMessage(err, 'Failed to kill server'));

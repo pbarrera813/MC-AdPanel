@@ -77,6 +77,7 @@ interface ServerContextType {
   addServer: (server: Omit<Server, 'id' | 'cpu' | 'ram' | 'status' | 'autoStart' | 'installError'>) => Promise<void>;
   startServer: (id: string) => Promise<void>;
   stopServer: (id: string) => Promise<void>;
+  killServer: (id: string) => Promise<void>;
   reorderServers: (orderedIds: string[]) => Promise<void>;
   refreshServers: () => Promise<void>;
   loading: boolean;
@@ -148,6 +149,11 @@ export const ServerProvider = ({ children }: { children: ReactNode }) => {
     await refreshServers();
   };
 
+  const killServer = async (id: string) => {
+    await apiRequest(`${API_BASE}/api/servers/${id}/kill`, { method: 'POST' }, 'Failed to kill server');
+    await refreshServers();
+  };
+
   const reorderServers = async (orderedIds: string[]) => {
     const normalized = orderedIds.map((id) => id.trim()).filter(Boolean);
     setServers((prev) => {
@@ -172,7 +178,7 @@ export const ServerProvider = ({ children }: { children: ReactNode }) => {
   return (
     <ServerContext.Provider value={{
       servers, activeServerId, setActiveServerId, activeServer,
-      addServer, startServer, stopServer, reorderServers, refreshServers,
+      addServer, startServer, stopServer, killServer, reorderServers, refreshServers,
       loading, error,
     }}>
       {children}
