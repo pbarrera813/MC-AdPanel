@@ -134,37 +134,39 @@ type ConsoleLogEntry struct {
 
 // runningServer holds runtime state for a managed server
 type runningServer struct {
-	cmd                *exec.Cmd
-	stdin              io.WriteCloser
-	status             string
-	cpu                float64
-	ram                float64
-	ramBytes           uint64
-	tps                float64
-	pid                int
-	logBuffer          []ConsoleLogEntry
-	subscribers        []chan ConsoleLogEntry
-	nextLogSeq         uint64
-	players            map[string]*onlinePlayer
-	pingBlocked        map[string]bool
-	lastPingPlayer     string
-	restartTimer       *time.Timer
-	restartAt          time.Time
-	stopTimer          *time.Timer
-	stopAt             time.Time
-	installError       string
-	lastTpsCmd         time.Time
-	lastTpsUpdate      time.Time
-	lastPlayerInfoCmd  time.Time
-	lastPlayersSync    time.Time
-	lastPingCmd        time.Time
-	pendingListRefresh bool
-	nextListRefreshAt  time.Time
-	pingSupported      bool
-	pingDisabledReason string
-	safeModeDisabled   []string // dirs renamed for safe mode (original paths)
-	mu                 sync.RWMutex
-	stopMetrics        chan struct{}
+	cmd                   *exec.Cmd
+	stdin                 io.WriteCloser
+	status                string
+	cpu                   float64
+	ram                   float64
+	ramBytes              uint64
+	tps                   float64
+	pid                   int
+	logBuffer             []ConsoleLogEntry
+	subscribers           []chan ConsoleLogEntry
+	nextLogSeq            uint64
+	players               map[string]*onlinePlayer
+	pingBlocked           map[string]bool
+	lastPingPlayer        string
+	restartTimer          *time.Timer
+	restartAt             time.Time
+	stopTimer             *time.Timer
+	stopAt                time.Time
+	installError          string
+	lastTpsCmd            time.Time
+	lastTpsUpdate         time.Time
+	lastPlayerInfoCmd     time.Time
+	lastPlayersSync       time.Time
+	lastPingCmd           time.Time
+	pendingListRefresh    bool
+	nextListRefreshAt     time.Time
+	emptyListStreak       int
+	idlePollingSuppressed bool
+	pingSupported         bool
+	pingDisabledReason    string
+	safeModeDisabled      []string // dirs renamed for safe mode (original paths)
+	mu                    sync.RWMutex
+	stopMetrics           chan struct{}
 }
 
 func clearScheduledActionsLocked(rs *runningServer) {
@@ -205,6 +207,7 @@ const maxPingChecksPerCycle = 6
 const maxWorldRefreshPerCycle = 6
 const extensionCapabilityCacheTTL = 15 * time.Second
 const serverConfigPathSafetyErrorCode = "server_config_path_unsafe"
+const emptyListSuppressionThreshold = 5
 
 var ErrExtensionAlreadyInstalled = errors.New("extension already installed")
 
@@ -594,6 +597,24 @@ func scheduleListRefreshLocked(rs *runningServer, delay time.Duration) {
 		rs.pendingListRefresh = true
 		rs.nextListRefreshAt = when
 	}
+}
+
+func resetIdlePollingSafeguardLocked(rs *runningServer) {
+	rs.emptyListStreak = 0
+	rs.idlePollingSuppressed = false
+}
+
+func applyListOnlineCountLocked(rs *runningServer, onlineCount int) {
+	if onlineCount <= 0 {
+		rs.emptyListStreak++
+		if rs.emptyListStreak >= emptyListSuppressionThreshold {
+			rs.idlePollingSuppressed = true
+			rs.pendingListRefresh = false
+			rs.nextListRefreshAt = time.Time{}
+		}
+		return
+	}
+	resetIdlePollingSafeguardLocked(rs)
 }
 
 func hasMetadataCapabilityInDirCached(cacheKey, dirPath string, expectedKeys map[string]struct{}) bool {
@@ -1241,6 +1262,7 @@ func (m *Manager) StartServer(id string) error {
 	rs.nextLogSeq = 1
 	rs.pendingListRefresh = false
 	rs.nextListRefreshAt = time.Time{}
+	resetIdlePollingSafeguardLocked(rs)
 	rs.lastPlayersSync = time.Time{}
 	rs.lastTpsUpdate = time.Time{}
 	clearScheduledActionsLocked(rs)
@@ -1275,6 +1297,7 @@ func (m *Manager) StartServer(id string) error {
 		rs.players = make(map[string]*onlinePlayer)
 		rs.lastPlayersSync = time.Time{}
 		rs.lastTpsUpdate = time.Time{}
+		resetIdlePollingSafeguardLocked(rs)
 
 		// Restore safe mode disabled directories
 		if len(rs.safeModeDisabled) > 0 {
@@ -1390,6 +1413,7 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 				JoinedAt: time.Now(),
 			}
 			rs.lastPlayersSync = time.Now()
+			resetIdlePollingSafeguardLocked(rs)
 			delete(rs.pingBlocked, playerName)
 			// Reconcile player list state after join events without periodic list spam.
 			scheduleListRefreshLocked(rs, 200*time.Millisecond)
@@ -1400,6 +1424,7 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 			delete(rs.players, playerName)
 			delete(rs.pingBlocked, playerName)
 			rs.lastPlayersSync = time.Now()
+			resetIdlePollingSafeguardLocked(rs)
 			// Reconcile player list state after leave events without periodic list spam.
 			scheduleListRefreshLocked(rs, 200*time.Millisecond)
 		}
@@ -1456,6 +1481,10 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 
 		// Parse list response to verify online players
 		if matches := listPattern.FindStringSubmatch(clean); matches != nil {
+			onlineCount := 0
+			if parsedCount, err := strconv.Atoi(strings.TrimSpace(matches[1])); err == nil && parsedCount >= 0 {
+				onlineCount = parsedCount
+			}
 			nameStr := strings.TrimSpace(matches[3])
 			rs.lastPlayersSync = time.Now()
 			if nameStr == "" {
@@ -1487,7 +1516,11 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 						delete(rs.pingBlocked, name)
 					}
 				}
+				if onlineCount <= 0 {
+					onlineCount = len(onlineNames)
+				}
 			}
+			applyListOnlineCountLocked(rs, onlineCount)
 			if playerCmdRecent {
 				suppressLine = true
 			}
@@ -1629,9 +1662,12 @@ func (m *Manager) collectMetrics(id string, rs *runningServer) {
 
 			polls := m.currentPollIntervals()
 			now := time.Now()
+			rs.mu.RLock()
+			idlePollingSuppressed := rs.idlePollingSuppressed
+			rs.mu.RUnlock()
 
 			// Poll TPS on configurable interval
-			if status == "Running" && hasTpsCmd {
+			if status == "Running" && hasTpsCmd && !idlePollingSuppressed {
 				tpsInterval := time.Duration(polls.tpsSeconds) * time.Second
 				if lastTpsPoll.IsZero() || now.Sub(lastTpsPoll) >= tpsInterval {
 					lastTpsPoll = now
@@ -1647,7 +1683,7 @@ func (m *Manager) collectMetrics(id string, rs *runningServer) {
 			// Player list hybrid sync: keep event-based refreshes and add periodic resync.
 			if !isProxyType(serverType) && status == "Running" {
 				playerSyncInterval := time.Duration(polls.playerSyncSeconds) * time.Second
-				if lastPlayerSyncPoll.IsZero() || now.Sub(lastPlayerSyncPoll) >= playerSyncInterval {
+				if !idlePollingSuppressed && (lastPlayerSyncPoll.IsZero() || now.Sub(lastPlayerSyncPoll) >= playerSyncInterval) {
 					lastPlayerSyncPoll = now
 					rs.mu.Lock()
 					scheduleListRefreshLocked(rs, 0)
@@ -1656,7 +1692,10 @@ func (m *Manager) collectMetrics(id string, rs *runningServer) {
 
 				shouldSendList := false
 				rs.mu.Lock()
-				if rs.pendingListRefresh && (rs.nextListRefreshAt.IsZero() || !now.Before(rs.nextListRefreshAt)) {
+				if rs.idlePollingSuppressed {
+					rs.pendingListRefresh = false
+					rs.nextListRefreshAt = time.Time{}
+				} else if rs.pendingListRefresh && (rs.nextListRefreshAt.IsZero() || !now.Before(rs.nextListRefreshAt)) {
 					rs.pendingListRefresh = false
 					rs.nextListRefreshAt = time.Time{}
 					rs.lastPlayerInfoCmd = now
