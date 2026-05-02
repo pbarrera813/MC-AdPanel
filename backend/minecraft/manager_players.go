@@ -1,7 +1,9 @@
 package minecraft
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -10,11 +12,13 @@ import (
 
 func (m *Manager) listPlayersSnapshot(id string) ([]PlayerInfo, bool, time.Time, error) {
 	m.mu.RLock()
-	if _, err := m.serverConfigForOperationLocked(id); err != nil {
+	cfg, err := m.serverConfigForOperationLocked(id)
+	if err != nil {
 		m.mu.RUnlock()
 		return nil, false, time.Time{}, err
 	}
 	rs, ok := m.running[id]
+	serverDir := cfg.Dir
 	m.mu.RUnlock()
 	if !ok {
 		return nil, false, time.Time{}, fmt.Errorf("server %s not found", id)
@@ -43,12 +47,14 @@ func (m *Manager) listPlayersSnapshot(id string) ([]PlayerInfo, bool, time.Time,
 
 		players = append(players, PlayerInfo{
 			Name:       p.Name,
+			UUID:       normalizePlayerUUID(p.UUID),
 			IP:         p.IP,
 			Ping:       p.Ping,
 			World:      p.World,
 			OnlineTime: onlineTime,
 		})
 	}
+	enrichPlayersWithUserCache(players, serverDir)
 
 	sort.Slice(players, func(i, j int) bool {
 		return players[i].Name < players[j].Name
@@ -59,6 +65,72 @@ func (m *Manager) listPlayersSnapshot(id string) ([]PlayerInfo, bool, time.Time,
 	isStale := len(players) > 0 && (lastSync.IsZero() || time.Since(lastSync) > staleThreshold)
 
 	return players, isStale, lastSync, nil
+}
+
+func enrichPlayersWithUserCache(players []PlayerInfo, serverDir string) {
+	if len(players) == 0 || strings.TrimSpace(serverDir) == "" {
+		return
+	}
+	needsLookup := false
+	for _, player := range players {
+		if player.UUID == "" {
+			needsLookup = true
+			break
+		}
+	}
+	if !needsLookup {
+		return
+	}
+
+	lookup := loadUserCacheUUIDs(serverDir)
+	if len(lookup) == 0 {
+		return
+	}
+	for i := range players {
+		if players[i].UUID != "" {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(players[i].Name))
+		if key == "" {
+			continue
+		}
+		if uuid := lookup[key]; uuid != "" {
+			players[i].UUID = uuid
+		}
+	}
+}
+
+func loadUserCacheUUIDs(serverDir string) map[string]string {
+	usercachePath := filepath.Join(serverDir, "usercache.json")
+	data, err := os.ReadFile(usercachePath)
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+
+	var entries []struct {
+		Name string `json:"name"`
+		UUID string `json:"uuid"`
+	}
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return nil
+	}
+
+	lookup := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		nameKey := strings.ToLower(strings.TrimSpace(entry.Name))
+		if nameKey == "" {
+			continue
+		}
+		normalizedUUID := normalizePlayerUUID(entry.UUID)
+		if normalizedUUID == "" {
+			continue
+		}
+		lookup[nameKey] = normalizedUUID
+	}
+	if len(lookup) == 0 {
+		return nil
+	}
+	return lookup
 }
 
 // ListPlayers returns currently online players tracked from log parsing

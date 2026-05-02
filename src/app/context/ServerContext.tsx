@@ -29,6 +29,7 @@ export interface Server {
 
 export interface Player {
   name: string;
+  uuid?: string;
   ip: string;
   ping: number;
   world: string;

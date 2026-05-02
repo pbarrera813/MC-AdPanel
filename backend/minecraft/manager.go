@@ -101,6 +101,7 @@ type FileEntry struct {
 // PlayerInfo represents an online player
 type PlayerInfo struct {
 	Name       string `json:"name"`
+	UUID       string `json:"uuid,omitempty"`
 	IP         string `json:"ip"`
 	Ping       int    `json:"ping"`
 	World      string `json:"world"`
@@ -110,6 +111,7 @@ type PlayerInfo struct {
 // onlinePlayer tracks a connected player's session
 type onlinePlayer struct {
 	Name        string
+	UUID        string
 	IP          string
 	Ping        int
 	World       string
@@ -501,7 +503,12 @@ func readPacket(r io.Reader) ([]byte, error) {
 	return payload, nil
 }
 
-func sampleMinecraftStatus(port int) (int, []string, error) {
+type statusSamplePlayer struct {
+	Name string
+	UUID string
+}
+
+func sampleMinecraftStatus(port int) (int, []statusSamplePlayer, error) {
 	if port <= 0 || port > 65535 {
 		return 0, nil, fmt.Errorf("invalid port %d", port)
 	}
@@ -562,6 +569,7 @@ func sampleMinecraftStatus(port int) (int, []string, error) {
 			Online int `json:"online"`
 			Sample []struct {
 				Name string `json:"name"`
+				ID   string `json:"id"`
 			} `json:"sample"`
 		} `json:"players"`
 	}
@@ -569,7 +577,7 @@ func sampleMinecraftStatus(port int) (int, []string, error) {
 		return 0, nil, err
 	}
 
-	names := make([]string, 0, len(status.Players.Sample))
+	players := make([]statusSamplePlayer, 0, len(status.Players.Sample))
 	seen := make(map[string]struct{}, len(status.Players.Sample))
 	for _, entry := range status.Players.Sample {
 		name := strings.TrimSpace(entry.Name)
@@ -580,9 +588,12 @@ func sampleMinecraftStatus(port int) (int, []string, error) {
 			continue
 		}
 		seen[name] = struct{}{}
-		names = append(names, name)
+		players = append(players, statusSamplePlayer{
+			Name: name,
+			UUID: normalizePlayerUUID(entry.ID),
+		})
 	}
-	return status.Players.Online, names, nil
+	return status.Players.Online, players, nil
 }
 
 type pollIntervals struct {
@@ -861,6 +872,18 @@ func normalizePlayerWorld(raw string) string {
 	return world
 }
 
+func normalizePlayerUUID(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	parsed, err := uuid.Parse(trimmed)
+	if err != nil {
+		return ""
+	}
+	return parsed.String()
+}
+
 func resolveDirEntryInfo(dirPath string, entry os.DirEntry) (os.FileInfo, error) {
 	entryPath := filepath.Join(dirPath, entry.Name())
 	if info, err := os.Stat(entryPath); err == nil {
@@ -869,29 +892,33 @@ func resolveDirEntryInfo(dirPath string, entry os.DirEntry) (os.FileInfo, error)
 	return os.Lstat(entryPath)
 }
 
-func applyPlayerSampleLocked(rs *runningServer, sampleNames []string, onlineCount int, sampledAt time.Time) {
+func applyPlayerSampleLocked(rs *runningServer, samplePlayers []statusSamplePlayer, onlineCount int, sampledAt time.Time) {
 	if onlineCount == 0 {
 		rs.players = make(map[string]*onlinePlayer)
 		rs.lastPlayersSync = sampledAt
 		return
 	}
-	if len(sampleNames) == 0 {
+	if len(samplePlayers) == 0 {
 		return
 	}
 
-	sampleSet := make(map[string]struct{}, len(sampleNames))
-	for _, name := range sampleNames {
-		trimmed := strings.TrimSpace(name)
+	sampleSet := make(map[string]struct{}, len(samplePlayers))
+	for _, samplePlayer := range samplePlayers {
+		trimmed := strings.TrimSpace(samplePlayer.Name)
 		if trimmed == "" {
 			continue
 		}
+		normalizedUUID := normalizePlayerUUID(samplePlayer.UUID)
 		sampleSet[trimmed] = struct{}{}
-		if _, ok := rs.players[trimmed]; !ok {
+		if existing, ok := rs.players[trimmed]; !ok {
 			rs.players[trimmed] = &onlinePlayer{
 				Name:     trimmed,
+				UUID:     normalizedUUID,
 				Ping:     -1,
 				JoinedAt: sampledAt,
 			}
+		} else if normalizedUUID != "" && existing.UUID != normalizedUUID {
+			existing.UUID = normalizedUUID
 		}
 	}
 
@@ -1745,9 +1772,9 @@ func (m *Manager) collectMetrics(id string, rs *runningServer) {
 					}
 					if shouldSampleStatus {
 						lastStatusSamplePoll = now
-						if sampledOnline, sampledNames, err := sampleMinecraftStatus(serverPort); err == nil {
+						if sampledOnline, sampledPlayers, err := sampleMinecraftStatus(serverPort); err == nil {
 							rs.mu.Lock()
-							applyPlayerSampleLocked(rs, sampledNames, sampledOnline, now)
+							applyPlayerSampleLocked(rs, sampledPlayers, sampledOnline, now)
 							rs.mu.Unlock()
 						}
 					}
