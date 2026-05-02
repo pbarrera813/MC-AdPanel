@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Server, Player } from '../../context/ServerContext';
-import { UserX, Ban, Skull, Search, Loader2 } from 'lucide-react';
+import { UserX, Ban, Skull, Search, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 import { toast } from 'sonner';
 import clsx from 'clsx';
-import { motion } from 'motion/react';
+import { AnimatePresence, motion } from 'motion/react';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip';
 import { apiRequest, toErrorMessage } from '../../lib/api';
 
@@ -18,6 +18,8 @@ export const PlayerList = ({ server }: PlayerListProps) => {
   const [pingStatus, setPingStatus] = useState<'supported' | 'missing_pingplayer' | 'missing_pingplayer_mod' | 'unsupported_server_type'>('supported');
   const [pollMs, setPollMs] = useState(4000);
   const [dataStale, setDataStale] = useState(false);
+  const [openPlayerName, setOpenPlayerName] = useState<string | null>(null);
+  const [mobileMenuView, setMobileMenuView] = useState<'details' | 'actions'>('details');
 
   useEffect(() => {
     let mounted = true;
@@ -115,6 +117,15 @@ export const PlayerList = ({ server }: PlayerListProps) => {
   );
   const animateRows = filteredPlayers.length <= 40;
 
+  useEffect(() => {
+    if (!openPlayerName) return;
+    const stillVisible = filteredPlayers.some((player) => player.name === openPlayerName);
+    if (!stillVisible) {
+      setOpenPlayerName(null);
+      setMobileMenuView('details');
+    }
+  }, [filteredPlayers, openPlayerName]);
+
   const handleAction = async (playerName: string, action: 'kick' | 'ban' | 'kill') => {
     try {
       await apiRequest(
@@ -132,6 +143,22 @@ export const PlayerList = ({ server }: PlayerListProps) => {
     } catch (err) {
       toast.error(toErrorMessage(err, `Failed to ${action} player`));
     }
+  };
+
+  const handleMobileToggle = (playerName: string) => {
+    if (openPlayerName === playerName) {
+      setOpenPlayerName(null);
+      setMobileMenuView('details');
+      return;
+    }
+    setOpenPlayerName(playerName);
+    setMobileMenuView('details');
+  };
+
+  const handleMobileAction = (playerName: string, action: 'kick' | 'ban' | 'kill') => {
+    handleAction(playerName, action);
+    setOpenPlayerName(null);
+    setMobileMenuView('details');
   };
 
   const getPingColor = (ping: number) => {
@@ -159,6 +186,31 @@ export const PlayerList = ({ server }: PlayerListProps) => {
     : pingStatus === 'missing_pingplayer_mod'
       ? 'Install the PlayerPing mod for this to work.'
       : 'Unable to show ping, install pingplayer plugin in order to be able to see player\'s ping';
+
+  const getUuidAvatarUrl = (playerUuid: string) => `https://mc-heads.net/avatar/${encodeURIComponent(playerUuid)}/32`;
+  const getNameAvatarUrl = (playerName: string) => `https://mc-heads.net/avatar/${encodeURIComponent(playerName)}/32`;
+  const getInitialsAvatarUrl = (playerName: string) => `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(playerName)}&backgroundColor=E5B80B`;
+  const getPlayerAvatarUrl = (player: Player) => {
+    const playerUuid = (player.uuid || '').trim();
+    if (playerUuid) {
+      return getUuidAvatarUrl(playerUuid);
+    }
+    return getNameAvatarUrl(player.name);
+  };
+  const handleAvatarError = (event: React.SyntheticEvent<HTMLImageElement>, player: Player) => {
+    const img = event.currentTarget;
+    const stage = img.dataset.fallbackStage || 'primary';
+    const hasUUID = Boolean((player.uuid || '').trim());
+
+    if (stage === 'primary' && hasUUID) {
+      img.dataset.fallbackStage = 'name';
+      img.src = getNameAvatarUrl(player.name);
+      return;
+    }
+
+    img.dataset.fallbackStage = 'initials';
+    img.src = getInitialsAvatarUrl(player.name);
+  };
 
   return (
     <motion.div
@@ -191,87 +243,188 @@ export const PlayerList = ({ server }: PlayerListProps) => {
         </div>
       ) : (
         <div className="flex-1 overflow-auto">
-          <table className="w-full text-left text-sm border-separate border-spacing-0">
-            <thead className="bg-[#252524] text-gray-400 sticky top-0 z-10">
-              <tr>
-                <th className="px-4 py-3 font-medium border-b border-[#3a3a3a]">Player</th>
-                <th className="px-4 py-3 font-medium border-b border-[#3a3a3a] hidden md:table-cell">IP Address</th>
-                <th className="px-4 py-3 font-medium border-b border-[#3a3a3a] hidden lg:table-cell">
-                  {pingStatus === 'unsupported_server_type' ? (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span className="cursor-help">Ping</span>
-                      </TooltipTrigger>
-                      <TooltipContent className="bg-[#252524] border border-[#3a3a3a] px-3 py-2 text-gray-200">
-                        Not supported on this server type
-                      </TooltipContent>
-                    </Tooltip>
-                  ) : (
-                    'Ping'
-                  )}
-                </th>
-                <th className="px-4 py-3 font-medium border-b border-[#3a3a3a] hidden sm:table-cell">Online Time</th>
-                <th className="px-4 py-3 font-medium border-b border-[#3a3a3a] hidden lg:table-cell">Current World</th>
-                <th className="px-4 py-3 font-medium border-b border-[#3a3a3a] text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#2a2a29]">
-              {filteredPlayers.map((player, index) => (
-                <motion.tr
+          <div className="hidden md:block">
+            <table className="w-full text-left text-sm border-separate border-spacing-0">
+              <thead className="bg-[#252524] text-gray-400 sticky top-0 z-10">
+                <tr>
+                  <th className="px-4 py-3 font-medium border-b border-[#3a3a3a]">Player</th>
+                  <th className="px-4 py-3 font-medium border-b border-[#3a3a3a] hidden md:table-cell">IP Address</th>
+                  <th className="px-4 py-3 font-medium border-b border-[#3a3a3a] hidden lg:table-cell">
+                    {pingStatus === 'unsupported_server_type' ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="cursor-help">Ping</span>
+                        </TooltipTrigger>
+                        <TooltipContent className="bg-[#252524] border border-[#3a3a3a] px-3 py-2 text-gray-200">
+                          Not supported on this server type
+                        </TooltipContent>
+                      </Tooltip>
+                    ) : (
+                      'Ping'
+                    )}
+                  </th>
+                  <th className="px-4 py-3 font-medium border-b border-[#3a3a3a] hidden sm:table-cell">Online Time</th>
+                  <th className="px-4 py-3 font-medium border-b border-[#3a3a3a] hidden lg:table-cell">Current World</th>
+                  <th className="px-4 py-3 font-medium border-b border-[#3a3a3a] text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#2a2a29]">
+                {filteredPlayers.map((player, index) => (
+                  <motion.tr
+                    key={player.name}
+                    initial={animateRows ? { opacity: 0, y: 3 } : false}
+                    animate={animateRows ? { opacity: 1, y: 0 } : false}
+                    transition={animateRows ? { duration: 0.16, delay: Math.min(index, 12) * 0.012, ease: 'easeOut' } : undefined}
+                    className="hover:bg-[#252524] transition-colors group"
+                  >
+                    <td className="px-4 py-3 text-white flex items-center gap-3">
+                      <img
+                        src={getPlayerAvatarUrl(player)}
+                        alt=""
+                        data-fallback-stage="primary"
+                        className="w-8 h-8 rounded bg-[#333]"
+                        onError={(event) => handleAvatarError(event, player)}
+                      />
+                      <div>
+                        <div className="font-bold">{player.name}</div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-gray-400 hidden md:table-cell font-mono">{player.ip || '-'}</td>
+                    <td className="px-4 py-3 hidden lg:table-cell">
+                      {pingStatus === 'supported' ? (
+                        <div className={clsx("flex items-center gap-1.5 font-mono", getPingColor(player.ping))}>
+                          <div className={clsx("w-2 h-2 rounded-full", getPingDotColor(player.ping))} />
+                          {player.ping >= 0 ? `${player.ping}ms` : '-'}
+                        </div>
+                      ) : (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div
+                              className={clsx("inline-flex items-center gap-1.5 font-mono cursor-help", getPingColor(player.ping))}
+                              tabIndex={0}
+                            >
+                              <div className={clsx("w-2 h-2 rounded-full", getPingDotColor(player.ping))} />
+                              -
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent className="bg-[#252524] border border-[#3a3a3a] px-3 py-2 text-gray-200">
+                            {pingHelpText}
+                          </TooltipContent>
+                        </Tooltip>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-gray-300 hidden sm:table-cell">{player.onlineTime}</td>
+                    <td className="px-4 py-3 text-gray-300 hidden lg:table-cell">{player.world || '-'}</td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <ActionBtn icon={UserX} label="Kick" color="hover:bg-yellow-900/40 hover:text-yellow-500" onClick={() => handleAction(player.name, 'kick')} />
+                        <ActionBtn icon={Ban} label="Ban" color="hover:bg-red-900/40 hover:text-red-500" onClick={() => handleAction(player.name, 'ban')} />
+                        <ActionBtn icon={Skull} label="Kill" color="hover:bg-gray-700 hover:text-gray-300" onClick={() => handleAction(player.name, 'kill')} />
+                      </div>
+                    </td>
+                  </motion.tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="md:hidden space-y-2">
+            {filteredPlayers.map((player, index) => {
+              const isOpen = openPlayerName === player.name;
+              const showActions = isOpen && mobileMenuView === 'actions';
+              return (
+                <motion.div
                   key={player.name}
                   initial={animateRows ? { opacity: 0, y: 3 } : false}
                   animate={animateRows ? { opacity: 1, y: 0 } : false}
                   transition={animateRows ? { duration: 0.16, delay: Math.min(index, 12) * 0.012, ease: 'easeOut' } : undefined}
-                  className="hover:bg-[#252524] transition-colors group"
+                  className="overflow-hidden rounded border border-[#3a3a3a] bg-[#252524]"
                 >
-                  <td className="px-4 py-3 text-white flex items-center gap-3">
-                    <img
-                      src={`https://mc-heads.net/avatar/${player.name}/32`}
-                      alt=""
-                      className="w-8 h-8 rounded bg-[#333]"
-                      onError={(e) => { (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/initials/svg?seed=${player.name}&backgroundColor=E5B80B`; }}
-                    />
-                    <div>
-                      <div className="font-bold">{player.name}</div>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-gray-400 hidden md:table-cell font-mono">{player.ip || '-'}</td>
-                  <td className="px-4 py-3 hidden lg:table-cell">
-                    {pingStatus === 'supported' ? (
-                      <div className={clsx("flex items-center gap-1.5 font-mono", getPingColor(player.ping))}>
+                  <button
+                    type="button"
+                    onClick={() => handleMobileToggle(player.name)}
+                    className="w-full px-3 py-2.5 flex items-center justify-between text-left"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="flex items-center gap-2">
                         <div className={clsx("w-2 h-2 rounded-full", getPingDotColor(player.ping))} />
-                        {player.ping >= 0 ? `${player.ping}ms` : '-'}
+                        <img
+                          src={getPlayerAvatarUrl(player)}
+                          alt=""
+                          data-fallback-stage="primary"
+                          className="w-8 h-8 rounded bg-[#333]"
+                          onError={(event) => handleAvatarError(event, player)}
+                        />
                       </div>
-                    ) : (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <div
-                            className={clsx("inline-flex items-center gap-1.5 font-mono cursor-help", getPingColor(player.ping))}
-                            tabIndex={0}
-                          >
-                            <div className={clsx("w-2 h-2 rounded-full", getPingDotColor(player.ping))} />
-                            -
-                          </div>
-                        </TooltipTrigger>
-                        <TooltipContent className="bg-[#252524] border border-[#3a3a3a] px-3 py-2 text-gray-200">
-                          {pingHelpText}
-                        </TooltipContent>
-                      </Tooltip>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-gray-300 hidden sm:table-cell">{player.onlineTime}</td>
-                  <td className="px-4 py-3 text-gray-300 hidden lg:table-cell">{player.world || '-'}</td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <ActionBtn icon={UserX} label="Kick" color="hover:bg-yellow-900/40 hover:text-yellow-500" onClick={() => handleAction(player.name, 'kick')} />
-                      <ActionBtn icon={Ban} label="Ban" color="hover:bg-red-900/40 hover:text-red-500" onClick={() => handleAction(player.name, 'ban')} />
-                      <ActionBtn icon={Skull} label="Kill" color="hover:bg-gray-700 hover:text-gray-300" onClick={() => handleAction(player.name, 'kill')} />
+                      <span className="text-white font-bold truncate">{player.name}</span>
                     </div>
-                  </td>
-                </motion.tr>
-              ))}
-            </tbody>
-          </table>
+                    {isOpen ? <ChevronUp size={17} className="text-gray-400 shrink-0" /> : <ChevronDown size={17} className="text-gray-400 shrink-0" />}
+                  </button>
+
+                  <AnimatePresence initial={false}>
+                    {isOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0, y: -4 }}
+                        animate={{ opacity: 1, height: 'auto', y: 0 }}
+                        exit={{ opacity: 0, height: 0, y: -4 }}
+                        transition={{ duration: 0.2, ease: 'easeOut' }}
+                        className="overflow-hidden border-t border-[#333]"
+                      >
+                        {!showActions ? (
+                          <div className="px-3 py-2 text-sm">
+                            <MobileInfoRow label="IP Address" value={player.ip || '-'} mono />
+                            <MobileInfoRow
+                              label="Ping"
+                              value={
+                                pingStatus === 'supported'
+                                  ? (player.ping >= 0 ? `${player.ping}ms` : '-')
+                                  : '-'
+                              }
+                              valueClassName={clsx("inline-flex items-center gap-1.5", getPingColor(player.ping))}
+                              extra={pingStatus !== 'supported' ? <span className="text-[11px] text-gray-500">{pingHelpText}</span> : null}
+                            />
+                            <MobileInfoRow label="Online Time" value={player.onlineTime || '-'} />
+                            <MobileInfoRow label="Current World" value={player.world || '-'} />
+                            <button
+                              type="button"
+                              onClick={() => setMobileMenuView('actions')}
+                              className="w-full mt-2 px-2 py-2 rounded border border-[#3a3a3a] bg-[#1f1f1f] text-left text-gray-200 hover:border-[#E5B80B]/60 hover:text-white transition-colors"
+                            >
+                              Actions
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="px-3 py-2.5 space-y-2">
+                            <button
+                              type="button"
+                              onClick={() => handleMobileAction(player.name, 'kick')}
+                              className="w-full px-3 py-2 rounded border border-yellow-700/40 bg-yellow-900/15 text-yellow-300 text-left hover:bg-yellow-900/30 transition-colors"
+                            >
+                              Kick
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleMobileAction(player.name, 'ban')}
+                              className="w-full px-3 py-2 rounded border border-red-700/40 bg-red-900/15 text-red-300 text-left hover:bg-red-900/30 transition-colors"
+                            >
+                              Ban
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleMobileAction(player.name, 'kill')}
+                              className="w-full px-3 py-2 rounded border border-gray-600 bg-[#1f1f1f] text-gray-200 text-left hover:bg-[#2b2b2b] transition-colors"
+                            >
+                              Kill
+                            </button>
+                          </div>
+                        )}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </motion.div>
+              );
+            })}
+          </div>
 
           {filteredPlayers.length === 0 && players.length > 0 && (
             <div className="text-center py-12 text-gray-500">No players found matching your filter.</div>
@@ -287,6 +440,26 @@ export const PlayerList = ({ server }: PlayerListProps) => {
     </motion.div>
   );
 };
+
+const MobileInfoRow = ({
+  label,
+  value,
+  mono,
+  valueClassName,
+  extra,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  valueClassName?: string;
+  extra?: React.ReactNode;
+}) => (
+  <div className="py-1.5 border-b border-[#2f2f2f] last:border-b-0">
+    <div className="text-[11px] uppercase tracking-wider text-gray-500">{label}</div>
+    <div className={clsx("mt-0.5 text-sm text-gray-200", mono && "font-mono", valueClassName)}>{value}</div>
+    {extra}
+  </div>
+);
 
 const ActionBtn = ({ icon: Icon, label, color, onClick }: { icon: any, label: string, color: string, onClick: () => void }) => (
   <button
