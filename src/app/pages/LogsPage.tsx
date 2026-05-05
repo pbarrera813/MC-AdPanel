@@ -192,6 +192,7 @@ const StoredLogs = ({ serverId }: { serverId: string }) => {
   }, [serverId]);
   useEscapeKey(!!deleteTarget, () => setDeleteTarget(null));
   useEscapeKey(batchDeleteConfirm, () => setBatchDeleteConfirm(false));
+  useEscapeKey(!!viewer.name, () => setViewer({ name: null, content: null }));
 
   const handleToggleFile = (name: string) => {
     setSelectedFiles(prev => {
@@ -386,9 +387,14 @@ const StoredLogs = ({ serverId }: { serverId: string }) => {
       <AnimatePresence>
         {viewer.name && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="w-full max-w-4xl bg-[#0f0f0f] border border-[#404040] rounded-lg shadow-2xl p-4 overflow-auto max-h-[80vh]">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-lg font-bold">{viewer.name}</h3>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-4xl bg-[#0f0f0f] border border-[#404040] rounded-lg shadow-2xl max-h-[80vh] overflow-hidden flex flex-col"
+            >
+              <div className="sticky top-0 z-10 bg-[#0f0f0f] border-b border-[#2f2f2f] px-4 py-3 flex items-center justify-between gap-3">
+                <h3 className="text-lg font-bold truncate">{viewer.name}</h3>
                 <div className="flex gap-2">
                   <button
                     onClick={async () => {
@@ -406,7 +412,9 @@ const StoredLogs = ({ serverId }: { serverId: string }) => {
                   <button onClick={() => setViewer({ name: null, content: null })} className="px-3 py-1 bg-[#E5B80B] rounded text-sm text-black">Close</button>
                 </div>
               </div>
-              <pre className="text-xs font-mono text-gray-200 whitespace-pre-wrap">{viewer.content}</pre>
+              <div className="flex-1 min-h-0 overflow-auto p-4">
+                <pre className="text-xs font-mono text-gray-200 whitespace-pre-wrap">{viewer.content}</pre>
+              </div>
             </motion.div>
           </div>
         )}
@@ -787,6 +795,7 @@ const CrashReports = () => {
   };
 
   const [reportViewer, setReportViewer] = useState<{ name: string | null; content: string | null }>({ name: null, content: null });
+  useEscapeKey(!!reportViewer.name, () => setReportViewer({ name: null, content: null }));
 
   const handleOpenReport = async (reportName: string) => {
     if (!activeServer) return;
@@ -1024,9 +1033,14 @@ const CrashReports = () => {
       <AnimatePresence>
         {reportViewer.name && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="w-full max-w-4xl bg-[#0f0f0f] border border-[#404040] rounded-lg shadow-2xl p-4 overflow-auto max-h-[80vh]">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-lg font-bold">{reportViewer.name}</h3>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-4xl bg-[#0f0f0f] border border-[#404040] rounded-lg shadow-2xl max-h-[80vh] overflow-hidden flex flex-col"
+            >
+              <div className="sticky top-0 z-10 bg-[#0f0f0f] border-b border-[#2f2f2f] px-4 py-3 flex items-center justify-between gap-3">
+                <h3 className="text-lg font-bold truncate">{reportViewer.name}</h3>
                 <div className="flex gap-2">
                   <button
                     onClick={async () => {
@@ -1044,7 +1058,9 @@ const CrashReports = () => {
                   <button onClick={() => setReportViewer({ name: null, content: null })} className="px-3 py-1 bg-[#E5B80B] rounded text-sm text-black">Close</button>
                 </div>
               </div>
-              <pre className="text-xs font-mono text-gray-200 whitespace-pre-wrap">{reportViewer.content}</pre>
+              <div className="flex-1 min-h-0 overflow-auto p-4">
+                <pre className="text-xs font-mono text-gray-200 whitespace-pre-wrap">{reportViewer.content}</pre>
+              </div>
             </motion.div>
           </div>
         )}
