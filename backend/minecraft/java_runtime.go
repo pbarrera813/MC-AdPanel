@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,6 +24,11 @@ var bundledJDKPaths = map[int]string{
 	21: "/opt/jdks/jdk21/bin/java",
 	25: "/opt/jdks/jdk25/bin/java",
 }
+
+var (
+	minecraftJavaVersionPattern = regexp.MustCompile(`^1\.([0-9]+)(\.[0-9]+)?$`)
+	velocityJavaVersionPattern  = regexp.MustCompile(`^([0-9]+)\.[0-9]+\.[0-9]+(-SNAPSHOT)?$`)
+)
 
 type javaRequirementResolver struct {
 	mu              sync.RWMutex
@@ -63,7 +69,10 @@ func (r *javaRequirementResolver) availableMajors() []int {
 }
 
 func (r *javaRequirementResolver) resolve(serverType, version string) (javaExec string, requiredMajor int, selectedMajor int, err error) {
-	requiredMajor = r.requiredMajor(serverType, version)
+	requiredMajor, err = r.requiredMajor(serverType, version)
+	if err != nil {
+		return "", 0, 0, err
+	}
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -87,37 +96,68 @@ func (r *javaRequirementResolver) resolve(serverType, version string) (javaExec 
 	return "", requiredMajor, 0, fmt.Errorf("required Java %d is not available (available: %v)", requiredMajor, majors)
 }
 
-func (r *javaRequirementResolver) requiredMajor(serverType, version string) int {
+func (r *javaRequirementResolver) requiredMajor(serverType, version string) (int, error) {
 	serverType = strings.ToLower(strings.TrimSpace(serverType))
-	if serverType == "vanilla" {
+	version = strings.TrimSpace(version)
+	var major int
+	var err error
+	switch serverType {
+	case "velocity":
+		major, err = requiredJavaForVelocity(version)
+	case "vanilla":
 		if major, ok := r.resolveVanillaMajor(version); ok {
-			return major
+			return major, nil
 		}
+		fallthrough
+	case "paper", "spigot", "purpur", "folia", "fabric", "forge", "neoforge":
+		// Loader providers expose Minecraft versions, not loader or installer versions.
+		major, err = requiredJavaByMCVersion(version)
+	default:
+		err = fmt.Errorf("unsupported server type")
 	}
-
-	return requiredJavaByMCVersion(version)
+	if err != nil {
+		return 0, fmt.Errorf("cannot determine Java requirement for type=%q version=%q: %w", serverType, version, err)
+	}
+	return major, nil
 }
 
-func requiredJavaByMCVersion(version string) int {
-	version = strings.TrimSpace(strings.ToLower(version))
-	if version == "" || version == "latest" {
-		return 21
+func requiredJavaForVelocity(version string) (int, error) {
+	parts := velocityJavaVersionPattern.FindStringSubmatch(strings.ToUpper(strings.TrimSpace(version)))
+	if parts == nil {
+		return 0, fmt.Errorf("unrecognized Velocity version")
 	}
-	if strings.HasPrefix(version, "1.") {
-		parts := strings.Split(version, ".")
-		if len(parts) >= 2 {
-			minor, err := strconv.Atoi(parts[1])
-			if err == nil {
-				if minor >= 22 {
-					return 25
-				}
-				if minor >= 21 {
-					return 21
-				}
-			}
-		}
+	major, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, fmt.Errorf("invalid Velocity major version: %w", err)
 	}
-	return 17
+	switch major {
+	case 3:
+		// Compatibility policy for 3.x, including the maintained Java 21 branch.
+		return 21, nil
+	case 4:
+		return 25, nil
+	default:
+		return 0, fmt.Errorf("unsupported Velocity major version %d", major)
+	}
+}
+
+func requiredJavaByMCVersion(version string) (int, error) {
+	parts := minecraftJavaVersionPattern.FindStringSubmatch(strings.TrimSpace(version))
+	if parts == nil {
+		return 0, fmt.Errorf("unrecognized Minecraft version")
+	}
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, fmt.Errorf("invalid Minecraft minor version: %w", err)
+	}
+	// Preserve the existing project policy for recognized Minecraft versions.
+	if minor >= 22 {
+		return 25, nil
+	}
+	if minor >= 21 {
+		return 21, nil
+	}
+	return 17, nil
 }
 
 func (r *javaRequirementResolver) resolveVanillaMajor(version string) (int, bool) {

@@ -1246,7 +1246,7 @@ func (m *Manager) StartServer(id string) error {
 		rs.mu.Unlock()
 		return fmt.Errorf("cannot start server due to Java compatibility: %w", javaErr)
 	}
-	log.Printf("[%s] Java selected: required=%d selected=%d exec=%s", cfg.Name, javaRequired, javaSelected, javaExec)
+	log.Printf("[%s] Java selected: required=%d selected=%d exec=%s type=%q version=%q", cfg.Name, javaRequired, javaSelected, javaExec, cfg.Type, cfg.Version)
 	if len(cfg.StartCommand) > 0 {
 		// For StartCommand-based servers (e.g. Forge/NeoForge), keep user_jvm_args.txt
 		// in sync with selected preset while avoiding unnecessary rewrites.
@@ -3630,7 +3630,7 @@ func (m *Manager) installServerJar(id, serverType, version string) {
 		log.Printf("[%s] Install blocked by Java compatibility: %v", cfg.Name, javaErr)
 		return
 	}
-	log.Printf("[%s] Java selected for install: required=%d selected=%d exec=%s", cfg.Name, javaRequired, javaSelected, javaExec)
+	log.Printf("[%s] Java selected for install: required=%d selected=%d exec=%s type=%q version=%q", cfg.Name, javaRequired, javaSelected, javaExec, serverType, actualVersion)
 
 	err = provider.DownloadJar(ctx, actualVersion, cfg.Dir, javaExec, progressFn)
 	if err != nil {
