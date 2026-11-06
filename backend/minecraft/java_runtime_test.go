@@ -63,11 +63,17 @@ func TestJavaResolverMinecraftPlatforms(t *testing.T) {
 			{"1.16.5", 17},
 			{"1.20", 17},
 			{"1.20.4", 17},
-			{"1.20.6", 17},
+			{"1.20.5", 21},
+				{"1.20.6", 21},
 			{"1.21", 21},
 			{"1.21.10", 21},
 			{" 1.22.1 ", 25},
 			{"1.23.0", 25},
+				{"26.1", 25},
+				{"26.1.2", 25},
+				{"26.3", 25},
+				{" 26.2 ", 25},
+				{"27.1", 25},
 		} {
 			t.Run(serverType+"/"+version.value, func(t *testing.T) {
 				exec, required, selected, err := testJavaResolver(17, 21, 25).resolve(serverType, version.value)
@@ -85,7 +91,7 @@ func TestJavaResolverRejectsUnknownRequirements(t *testing.T) {
 		versions   []string
 	}{
 		{"velocity", []string{"", "latest", "1.1.9", "2.0.0", "5.0.0", "1.21.1", "4", "4.1", "4.x.0", "4.1.0.1", "4.1.0-unknown", "4.1.0-SNAPSHOT-extra", "4.1.-1", "+4.1.0", "nonsense"}},
-		{"paper", []string{"", "latest", "4.1.0", "1.x.0", "1.21.x", "1.21.1.2", "1.21-SNAPSHOT", "1.-1", "1.21garbage", "1.21.1-52.0.0", "1.999999999999999999999999999999", "26.1", "nonsense"}},
+		{"paper", []string{"", "latest", "4.1.0", "1.x.0", "1.21.x", "1.21.1.2", "1.21-SNAPSHOT", "1.-1", "1.21garbage", "1.21.1-52.0.0", "1.999999999999999999999999999999", "26", "26.x", "26.1.2.3", "26.1-rc-1", "26.1-snapshot-1", "25.1", "26w01a", "nonsense"}},
 		{"fabric", []string{"0.16.10"}},
 		{"forge", []string{"52.0.0", "1.21.1-52.0.0"}},
 		{"neoforge", []string{"21.1.80"}},
@@ -224,6 +230,20 @@ func TestJavaResolverVanillaMetadataFailure(t *testing.T) {
 			exec, required, selected, err := r.resolve("vanilla", "unrecognized")
 			if err == nil || exec != "" || required != 0 || selected != 0 {
 				t.Fatalf("unknown Vanilla identifier: required=%d selected=%d exec=%q err=%v", required, selected, exec, err)
+			}
+		})
+	}
+}
+
+func TestJavaResolverVanillaYearBasedFallback(t *testing.T) {
+	mockJavaMetadata(t, func(req *http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("metadata unavailable")
+	})
+	for _, version := range []string{"26.1", "26.1.2", "26.3"} {
+		t.Run(version, func(t *testing.T) {
+			exec, required, selected, err := testJavaResolver(17, 21, 25).resolve("vanilla", version)
+			if err != nil || required != 25 || selected != 25 || exec != bundledJDKPaths[25] {
+				t.Fatalf("required=%d selected=%d exec=%q err=%v; want Java 25", required, selected, exec, err)
 			}
 		})
 	}

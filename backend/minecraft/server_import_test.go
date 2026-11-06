@@ -561,3 +561,32 @@ func TestServerImportPortConflictReturnsSuggestion(t *testing.T) {
 		t.Fatalf("expected suggested port different from requested, got %d", conflictErr.SuggestedPort)
 	}
 }
+
+func TestExtractMCVersionFromText(t *testing.T) {
+	tests := []struct{ name, text, want string }{
+		{"vanilla log 26.x", "[12:00:00] [main/INFO]: Starting minecraft server version 26.1.2", "26.1.2"},
+		{"vanilla log 1.x", "[12:00:00] [main/INFO]: Starting minecraft server version 1.21.1", "1.21.1"},
+		{"neoforge args 26.x", "ModLauncher running: args [--launchTarget, forgeserver, --fml.neoForgeVersion, 26.3.0.101, --fml.fmlVersion, 11.0.5, --fml.mcVersion, 26.3]", "26.3"},
+		{"neoforge args 1.x", "ModLauncher running: args [--fml.neoForgeVersion, 21.1.80, --fml.fmlVersion, 4.0.31, --fml.mcVersion, 1.21.1]", "1.21.1"},
+		{"paper jar 26.x", "paper-26.1.2-5.jar", "26.1.2"},
+		{"paper jar 1.x", "paper-1.21.1-100.jar", "1.21.1"},
+		{"fabric launcher 26.x", "fabric-server-mc.26.1-loader.0.17.0-launcher.1.0.1.jar", "26.1"},
+		{"fabric launcher 1.x", "fabric-server-mc.1.21.1-loader.0.16.9-launcher.1.0.1.jar", "1.21.1"},
+		{"forge jar 26.x", "forge-26.1-62.0.9-installer.jar", "26.1"},
+		{"forge jar 1.x", "forge-1.21.1-52.0.30-installer.jar", "1.21.1"},
+		{"loading paper 26.x", "Loading Paper 26.1.2-5-main", "26.1.2"},
+		{"neoforge library path 26.x", "libraries/net/neoforged/neoforge/26.3.0.101/unix_args.txt", ""},
+		{"neoforge library path 1.x", "libraries/net/neoforged/neoforge/21.1.80/unix_args.txt", ""},
+		{"java version", "Running Java 25.0.1 (OpenJDK)", ""},
+		{"ip address", "Listening on 192.168.26.1:25565", ""},
+		{"loopback", "Connected to 127.0.0.1", ""},
+		{"library version", "Using Netty 4.1.118 and EssentialsX 2.21.0", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := extractMCVersionFromText(tt.text); got != tt.want {
+				t.Fatalf("extractMCVersionFromText(%q) = %q; want %q", tt.text, got, tt.want)
+			}
+		})
+	}
+}

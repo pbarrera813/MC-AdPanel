@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -588,6 +589,59 @@ type neoforgeVersionsResponse struct {
 	Versions []string `json:"versions"`
 }
 
+// NeoForge 26.x+ releases are <yy>.<drop>.<hotfix>.<build>; a zero hotfix is omitted from the Minecraft version (26.3.0.101 is 26.3).
+func neoForgeMCVersion(v string) (string, bool) {
+	parts := strings.Split(v, ".")
+	if len(parts) < 2 {
+		return "", false
+	}
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return "", false
+	}
+	if major < 26 {
+		return fmt.Sprintf("1.%s.%s", parts[0], parts[1]), true
+	}
+	if len(parts) < 4 {
+		return "", false
+	}
+	if _, err := strconv.Atoi(parts[1]); err != nil {
+		return "", false
+	}
+	hotfix, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return "", false
+	}
+	if hotfix == 0 {
+		return parts[0] + "." + parts[1], true
+	}
+	return fmt.Sprintf("%s.%s.%d", parts[0], parts[1], hotfix), true
+}
+
+func neoForgePrefix(mc string) (string, bool) {
+	parts := strings.Split(mc, ".")
+	if parts[0] == "1" {
+		if len(parts) < 3 {
+			return "", false
+		}
+		return parts[1] + "." + parts[2] + ".", true
+	}
+	if major, err := strconv.Atoi(parts[0]); err != nil || major < 26 || len(parts) < 2 || len(parts) > 3 {
+		return "", false
+	}
+	if _, err := strconv.Atoi(parts[1]); err != nil {
+		return "", false
+	}
+	hotfix := "0"
+	if len(parts) == 3 {
+		if _, err := strconv.Atoi(parts[2]); err != nil {
+			return "", false
+		}
+		hotfix = parts[2]
+	}
+	return parts[0] + "." + parts[1] + "." + hotfix + ".", true
+}
+
 func (p *NeoForgeProvider) FetchVersions(ctx context.Context) ([]VersionInfo, error) {
 	var resp neoforgeVersionsResponse
 	if err := fetchJSON(ctx, "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge", &resp); err != nil {
@@ -603,11 +657,10 @@ func (p *NeoForgeProvider) FetchVersions(ctx context.Context) ([]VersionInfo, er
 		if strings.Contains(v, "-beta") || strings.Contains(v, "-alpha") || strings.Contains(v, "+") {
 			continue
 		}
-		parts := strings.SplitN(v, ".", 3)
-		if len(parts) < 2 {
+		mcVersion, ok := neoForgeMCVersion(v)
+		if !ok {
 			continue
 		}
-		mcVersion := fmt.Sprintf("1.%s.%s", parts[0], parts[1])
 		// Keep the latest NeoForge version for each MC version
 		mcVersionSet[mcVersion] = v
 	}
@@ -643,12 +696,10 @@ func (p *NeoForgeProvider) DownloadJar(ctx context.Context, version string, dest
 		return fmt.Errorf("failed to fetch NeoForge versions: %w", err)
 	}
 
-	// Parse MC version "1.X.Y" → NeoForge prefix "X.Y."
-	mcParts := strings.SplitN(resolved, ".", 3)
-	if len(mcParts) < 3 {
+	nfPrefix, ok := neoForgePrefix(resolved)
+	if !ok {
 		return fmt.Errorf("invalid MC version format: %s", resolved)
 	}
-	nfPrefix := mcParts[1] + "." + mcParts[2] + "."
 
 	// Find the latest stable NeoForge version with this prefix
 	nfVersion := ""

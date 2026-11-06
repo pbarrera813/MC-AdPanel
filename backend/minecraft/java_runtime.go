@@ -27,7 +27,8 @@ var bundledJDKPaths = map[int]string{
 
 var (
 	minecraftJavaVersionPattern = regexp.MustCompile(`^1\.([0-9]+)(\.[0-9]+)?$`)
-	velocityJavaVersionPattern  = regexp.MustCompile(`^([0-9]+)\.[0-9]+\.[0-9]+(-SNAPSHOT)?$`)
+	yearMinecraftJavaVersionPattern =regexp.MustCompile(`^([0-9]{2})\.[0-9]+(\.[0-9]+)?$`)
+	velocityJavaVersionPattern      = regexp.MustCompile(`^([0-9]+)\.[0-9]+\.[0-9]+(-SNAPSHOT)?$`)
 )
 
 type javaRequirementResolver struct {
@@ -142,7 +143,15 @@ func requiredJavaForVelocity(version string) (int, error) {
 }
 
 func requiredJavaByMCVersion(version string) (int, error) {
-	parts := minecraftJavaVersionPattern.FindStringSubmatch(strings.TrimSpace(version))
+	version = strings.TrimSpace(version)
+	if y := yearMinecraftJavaVersionPattern.FindStringSubmatch(version); y != nil {
+		// Capped at 49 so raw loader builds such as Forge 52.x still error; raise the cap when Minecraft reaches 2049.
+		if year, _ := strconv.Atoi(y[1]); year >= 26 && year <= 49 {
+			return 25, nil
+		}
+		return 0, fmt.Errorf("unrecognized Minecraft version")
+	}
+	parts := minecraftJavaVersionPattern.FindStringSubmatch(version)
 	if parts == nil {
 		return 0, fmt.Errorf("unrecognized Minecraft version")
 	}
@@ -150,12 +159,18 @@ func requiredJavaByMCVersion(version string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("invalid Minecraft minor version: %w", err)
 	}
-	// Preserve the existing project policy for recognized Minecraft versions.
 	if minor >= 22 {
 		return 25, nil
 	}
 	if minor >= 21 {
 		return 21, nil
+	}
+	// Mojang moved to Java 21 at 1.20.5.
+	if minor == 20 {
+		patch, _ := strconv.Atoi(strings.TrimPrefix(parts[2], "."))
+		if patch >= 5 {
+			return 21, nil
+		}
 	}
 	return 17, nil
 }

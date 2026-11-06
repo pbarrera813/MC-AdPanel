@@ -26,9 +26,10 @@ const importAnalysisTTL = 15 * time.Minute
 
 var (
 	versionDetectionPattern = regexp.MustCompile(`\d+\.\d+(?:\.\d+)?(?:[-+._][A-Za-z0-9._-]+)?`)
-	mcVersionPattern        = regexp.MustCompile(`\b1\.\d{1,2}(?:\.\d+)?\b`)
-	loadingPaperPattern     = regexp.MustCompile(`(?i)Loading\s+Paper\s+([0-9]+\.[0-9]+(?:\.[0-9]+)?)`)
-	forMinecraftPattern     = regexp.MustCompile(`(?i)for\s+Minecraft\s+([0-9]+\.[0-9]+(?:\.[0-9]+)?)`)
+	// The edge classes reject fragments of longer dotted numbers (IPs, loader builds such as 21.1.80 or 26.3.0.101).
+	mcVersionPattern    = regexp.MustCompile(`(?:^|[^0-9.]|[^0-9]\.)(1\.\d{1,2}(?:\.\d+)?|(?:2[6-9]|[34]\d)\.\d+(?:\.\d+)?)(?:$|[^0-9.]|\.[^0-9])`)
+	loadingPaperPattern = regexp.MustCompile(`(?i)Loading\s+Paper\s+([0-9]+\.[0-9]+(?:\.[0-9]+)?)`)
+	forMinecraftPattern = regexp.MustCompile(`(?i)(?:for\s+Minecraft|minecraft\s+server\s+version|fml\.mcVersion,)\s+([0-9]+\.[0-9]+(?:\.[0-9]+)?)`)
 )
 
 type ServerImportProperties struct {
@@ -407,8 +408,8 @@ func extractMCVersionFromText(value string) string {
 	if match := forMinecraftPattern.FindStringSubmatch(text); len(match) > 1 {
 		return strings.TrimSpace(match[1])
 	}
-	if match := mcVersionPattern.FindString(text); match != "" {
-		return strings.TrimSpace(match)
+	if match := mcVersionPattern.FindStringSubmatch(text); match != nil {
+		return match[1]
 	}
 	return ""
 }
