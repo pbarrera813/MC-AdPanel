@@ -7,7 +7,7 @@ WORKDIR /build
 
 # Install dependencies first (better caching)
 COPY package.json package-lock.json* ./
-RUN npm install
+RUN npm ci
 
 # Copy source and config files needed for the build
 COPY src/ src/
@@ -27,7 +27,7 @@ RUN apk add --no-cache git
 
 # Copy go module files and download dependencies
 COPY backend/go.mod backend/go.sum* ./
-RUN go mod tidy && go mod download
+RUN go mod download
 
 # Copy backend source and build a static binary
 COPY backend/ ./

@@ -8,9 +8,12 @@ dist/
 .vite/
 *.log
 
-# IDE
+# IDE and assistant tooling
 .vscode/
 .idea/
+.claude/
+.codex/
+.agents/
 
 # OS files
 .DS_Store
