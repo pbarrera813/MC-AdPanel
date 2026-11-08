@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { useServer } from '../context/ServerContext';
-import { Play, Square, AlertOctagon, RotateCw, Terminal, Folder, Users, ShieldAlert, Cpu, HardDrive, Clock, Calendar as CalendarIcon, AlertTriangle, Settings, Save, ChevronUp, ChevronDown } from 'lucide-react';
+import { Play, Square, AlertOctagon, RotateCw, Terminal, Folder, Users, ShieldAlert, Clock, Calendar as CalendarIcon, AlertTriangle, Settings, Save, ChevronUp, ChevronDown } from 'lucide-react';
 import { AreaChart, Area, ResponsiveContainer } from 'recharts';
 import clsx from 'clsx';
 import { motion, AnimatePresence } from 'motion/react';
+import { Modal } from '../components/ui/modal';
 import { toast } from 'sonner';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../components/ui/tooltip';
 import { useEscapeKey } from '../hooks/useEscapeKey';
@@ -545,7 +546,7 @@ export const ManagementPage = () => {
       <div className="flex-1 overflow-hidden flex relative min-h-0">
         <div className="flex-1 overflow-hidden flex flex-col relative z-0 min-h-0">
           <div className={clsx('h-full min-h-0 overflow-hidden', activeTab === 'console' ? 'block' : 'hidden')}>
-            <ConsoleView server={activeServer} />
+            <ConsoleView key={activeServer.id} server={activeServer} />
           </div>
           <div className={clsx('h-full min-h-0 overflow-hidden', activeTab === 'browse' ? 'block' : 'hidden')}>
             <FileBrowser server={activeServer} />
@@ -761,250 +762,190 @@ export const ManagementPage = () => {
         )}
       </div>
 
-      {/* Schedule Restart Modal */}
-      <AnimatePresence>
-        {isRestartModalOpen && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-sm bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6"
-            >
-              <div className="flex items-center gap-3 text-white mb-6">
-                <Clock className="text-[#E5B80B]" size={24} />
-                <h3 className="text-xl font-bold">Schedule Restart</h3>
-              </div>
-              
-              <div className="space-y-4 mb-6">
-                <label className="block text-sm text-gray-400">Restart will happen:</label>
-                <select 
-                  value={restartOption}
-                  onChange={(e) => setRestartOption(e.target.value as RestartOption)}
-                  className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B] focus:ring-1 focus:ring-[#E5B80B]"
-                >
-                  <option value="now">Restart now</option>
-                  <option value="5m">In 5 minutes</option>
-                  <option value="30m">In 30 minutes</option>
-                  <option value="1h">In 1 hour</option>
-                  <option value="3h">In 3 hours</option>
-                  <option value="6h">In 6 hours</option>
-                  <option value="custom">Custom Time</option>
-                </select>
+      <Modal open={isRestartModalOpen} size="sm" scope="container">
+        <div className="flex items-center gap-3 text-white mb-6">
+          <Clock className="text-[#E5B80B]" size={24} />
+          <h3 className="text-xl font-bold">Schedule Restart</h3>
+        </div>
+        
+        <div className="space-y-4 mb-6">
+          <label className="block text-sm text-gray-400">Restart will happen:</label>
+          <select 
+            value={restartOption}
+            onChange={(e) => setRestartOption(e.target.value as RestartOption)}
+            className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B] focus:ring-1 focus:ring-[#E5B80B]"
+          >
+            <option value="now">Restart now</option>
+            <option value="5m">In 5 minutes</option>
+            <option value="30m">In 30 minutes</option>
+            <option value="1h">In 1 hour</option>
+            <option value="3h">In 3 hours</option>
+            <option value="6h">In 6 hours</option>
+            <option value="custom">Custom Time</option>
+          </select>
 
-                <AnimatePresence initial={false}>
-                  {restartOption === 'custom' && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0, y: -4 }}
-                      animate={{ opacity: 1, height: 'auto', y: 0 }}
-                      exit={{ opacity: 0, height: 0, y: -4 }}
-                      transition={{ duration: 0.22, ease: 'easeOut' }}
-                      className="overflow-hidden"
-                    >
+          <AnimatePresence initial={false}>
+            {restartOption === 'custom' && (
+              <motion.div
+                initial={{ opacity: 0, height: 0, y: -4 }}
+                animate={{ opacity: 1, height: 'auto', y: 0 }}
+                exit={{ opacity: 0, height: 0, y: -4 }}
+                transition={{ duration: 0.22, ease: 'easeOut' }}
+                className="overflow-hidden"
+              >
 	                      <label className="block text-sm text-gray-400 mb-2">Select Time:</label>
-                        <DateTimePopover value={customTime} onChange={setCustomTime} />
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
+                  <DateTimePopover value={customTime} onChange={setCustomTime} />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
 
-              <div className="flex justify-end gap-3">
-                <button 
-                  onClick={() => setIsRestartModalOpen(false)} 
-                  className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
-                >
-                  Cancel
-                </button>
-                <button 
-                  onClick={handleScheduleRestart} 
-                  className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold shadow-lg shadow-[#E5B80B]/20"
-                >
-                  Confirm
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+        <div className="flex justify-end gap-3">
+          <button 
+            onClick={() => setIsRestartModalOpen(false)} 
+            className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
+          >
+            Cancel
+          </button>
+          <button 
+            onClick={handleScheduleRestart} 
+            className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold shadow-lg shadow-[#E5B80B]/20"
+          >
+            Confirm
+          </button>
+        </div>
+      </Modal>
 
-      {/* Schedule Stop Modal */}
-      <AnimatePresence>
-        {isStopModalOpen && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-sm bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6"
-            >
-              <div className="flex items-center gap-3 text-white mb-6">
+      <Modal open={isStopModalOpen} size="sm" scope="container">
+        <div className="flex items-center gap-3 text-white mb-6">
 	                <CalendarIcon className="text-[#E5B80B]" size={24} />
-                <h3 className="text-xl font-bold">Schedule Stop</h3>
-              </div>
+          <h3 className="text-xl font-bold">Schedule Stop</h3>
+        </div>
 
-              <div className="space-y-4 mb-6">
-                <label className="block text-sm text-gray-400">Server will stop:</label>
-                <select
-                  value={stopOption}
-                  onChange={(e) => setStopOption(e.target.value as StopOption)}
-                  className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B] focus:ring-1 focus:ring-[#E5B80B]"
-                >
-                  <option value="5m">In 5 minutes</option>
-                  <option value="30m">In 30 minutes</option>
-                  <option value="1h">In 1 hour</option>
-                  <option value="3h">In 3 hours</option>
-                  <option value="6h">In 6 hours</option>
-                  <option value="custom">Custom Time</option>
-                </select>
+        <div className="space-y-4 mb-6">
+          <label className="block text-sm text-gray-400">Server will stop:</label>
+          <select
+            value={stopOption}
+            onChange={(e) => setStopOption(e.target.value as StopOption)}
+            className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B] focus:ring-1 focus:ring-[#E5B80B]"
+          >
+            <option value="5m">In 5 minutes</option>
+            <option value="30m">In 30 minutes</option>
+            <option value="1h">In 1 hour</option>
+            <option value="3h">In 3 hours</option>
+            <option value="6h">In 6 hours</option>
+            <option value="custom">Custom Time</option>
+          </select>
 
-                <AnimatePresence initial={false}>
-                  {stopOption === 'custom' && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0, y: -4 }}
-                      animate={{ opacity: 1, height: 'auto', y: 0 }}
-                      exit={{ opacity: 0, height: 0, y: -4 }}
-                      transition={{ duration: 0.22, ease: 'easeOut' }}
-                      className="overflow-hidden"
-                    >
+          <AnimatePresence initial={false}>
+            {stopOption === 'custom' && (
+              <motion.div
+                initial={{ opacity: 0, height: 0, y: -4 }}
+                animate={{ opacity: 1, height: 'auto', y: 0 }}
+                exit={{ opacity: 0, height: 0, y: -4 }}
+                transition={{ duration: 0.22, ease: 'easeOut' }}
+                className="overflow-hidden"
+              >
 	                      <label className="block text-sm text-gray-400 mb-2">Select Time:</label>
-                        <DateTimePopover value={customStopTime} onChange={setCustomStopTime} />
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
+                  <DateTimePopover value={customStopTime} onChange={setCustomStopTime} />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
 
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={() => setIsStopModalOpen(false)}
-                  className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleScheduleStop}
-                  className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold shadow-lg shadow-[#E5B80B]/20"
-                >
-                  Confirm
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+        <div className="flex justify-end gap-3">
+          <button
+            onClick={() => setIsStopModalOpen(false)}
+            className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleScheduleStop}
+            className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold shadow-lg shadow-[#E5B80B]/20"
+          >
+            Confirm
+          </button>
+        </div>
+      </Modal>
 
-      {/* Safe Mode Modal */}
-      <AnimatePresence>
-        {isSafeModeModalOpen && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-sm bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6"
-            >
-              <div className="flex items-center gap-3 text-white mb-6">
-                <ShieldAlert className="text-[#E5B80B]" size={24} />
-                <h3 className="text-xl font-bold">Start Safe Mode?</h3>
-              </div>
-              
-              <p className="text-gray-300 mb-8">
-                Safe mode turns on the server without any mods/plugins active, do you wish to continue?
-              </p>
+      <Modal open={isSafeModeModalOpen} size="sm" scope="container">
+        <div className="flex items-center gap-3 text-white mb-6">
+          <ShieldAlert className="text-[#E5B80B]" size={24} />
+          <h3 className="text-xl font-bold">Start Safe Mode?</h3>
+        </div>
+        
+        <p className="text-gray-300 mb-8">
+          Safe mode turns on the server without any mods/plugins active, do you wish to continue?
+        </p>
 
-              <div className="flex justify-end gap-3">
-                <button 
-                  onClick={() => setIsSafeModeModalOpen(false)} 
-                  className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
-                >
-                  Cancel
-                </button>
-                <button 
-                  onClick={handleSafeMode} 
-                  className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold shadow-lg shadow-[#E5B80B]/20"
-                >
-                  Continue
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+        <div className="flex justify-end gap-3">
+          <button 
+            onClick={() => setIsSafeModeModalOpen(false)} 
+            className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
+          >
+            Cancel
+          </button>
+          <button 
+            onClick={handleSafeMode} 
+            className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold shadow-lg shadow-[#E5B80B]/20"
+          >
+            Continue
+          </button>
+        </div>
+      </Modal>
 
-      {/* Kill Server Modal */}
-      <AnimatePresence>
-        {isKillModalOpen && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-sm bg-[#252524] border border-red-900/50 rounded-lg shadow-2xl p-6"
-            >
-              <div className="flex items-center gap-3 text-white mb-6">
-                <AlertTriangle className="text-red-500" size={24} />
-                <h3 className="text-xl font-bold">Kill Server?</h3>
-              </div>
-              
-              <p className="text-gray-300 mb-8">
-                Killing the server can lead to errors/file corruption on the server. Are you sure you want to continue?
-              </p>
+      <Modal open={isKillModalOpen} size="sm" tone="danger" scope="container">
+        <div className="flex items-center gap-3 text-white mb-6">
+          <AlertTriangle className="text-red-500" size={24} />
+          <h3 className="text-xl font-bold">Kill Server?</h3>
+        </div>
+        
+        <p className="text-gray-300 mb-8">
+          Killing the server can lead to errors/file corruption on the server. Are you sure you want to continue?
+        </p>
 
-              <div className="flex justify-end gap-3">
-                <button 
-                  onClick={() => setIsKillModalOpen(false)} 
-                  className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
-                >
-                  Cancel
-                </button>
-                <button 
-                  onClick={handleKill} 
-                  className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold shadow-lg shadow-red-900/20"
-                >
-                  Continue
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+        <div className="flex justify-end gap-3">
+          <button 
+            onClick={() => setIsKillModalOpen(false)} 
+            className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
+          >
+            Cancel
+          </button>
+          <button 
+            onClick={handleKill} 
+            className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold shadow-lg shadow-red-900/20"
+          >
+            Continue
+          </button>
+        </div>
+      </Modal>
 
-      {/* Stop Server to Edit Settings Modal */}
-      <AnimatePresence>
-        {isStopToEditModalOpen && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-sm bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6"
-            >
-              <div className="flex items-center gap-3 text-white mb-6">
-                <AlertTriangle className="text-yellow-500" size={24} />
-                <h3 className="text-xl font-bold">Server is Running</h3>
-              </div>
+      <Modal open={isStopToEditModalOpen} size="sm" scope="container">
+        <div className="flex items-center gap-3 text-white mb-6">
+          <AlertTriangle className="text-yellow-500" size={24} />
+          <h3 className="text-xl font-bold">Server is Running</h3>
+        </div>
 
-              <p className="text-gray-300 mb-8">
-                Changing these settings while the server is enabled can lead to corruption or fatal errors. Do you want to turn off the server before editing?
-              </p>
+        <p className="text-gray-300 mb-8">
+          Changing these settings while the server is enabled can lead to corruption or fatal errors. Do you want to turn off the server before editing?
+        </p>
 
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={() => setIsStopToEditModalOpen(false)}
-                  className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleStopToEdit}
-                  className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold shadow-lg shadow-[#E5B80B]/20"
-                >
-                  Accept
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+        <div className="flex justify-end gap-3">
+          <button
+            onClick={() => setIsStopToEditModalOpen(false)}
+            className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleStopToEdit}
+            className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold shadow-lg shadow-[#E5B80B]/20"
+          >
+            Accept
+          </button>
+        </div>
+      </Modal>
 
     </div>
   );

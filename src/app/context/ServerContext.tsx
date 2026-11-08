@@ -1,8 +1,14 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { apiRequest, toErrorMessage } from '../lib/api';
 
 export type ServerStatus = 'Running' | 'Stopped' | 'Crashed' | 'Booting' | 'Installing' | 'Error';
 export type ServerType = 'Vanilla' | 'Spigot' | 'Paper' | 'Folia' | 'Purpur' | 'Velocity' | 'Forge' | 'Fabric' | 'NeoForge';
+
+export interface ServerProblem {
+  title: string;
+  hint: string;
+  detail?: string;
+}
 
 export interface Server {
   id: string;
@@ -25,6 +31,10 @@ export interface Server {
   alwaysPreTouch: boolean;
   installError?: string;
   fabricTpsAvailable?: boolean;
+  players: number;
+  startedAt?: string;
+  restartOnCrash: boolean;
+  problem?: ServerProblem;
 }
 
 export interface Player {
@@ -75,7 +85,7 @@ interface ServerContextType {
   activeServerId: string | null;
   setActiveServerId: (id: string) => void;
   activeServer: Server | undefined;
-  addServer: (server: Omit<Server, 'id' | 'cpu' | 'ram' | 'status' | 'autoStart' | 'installError'>) => Promise<void>;
+  addServer: (server: Omit<Server, 'id' | 'cpu' | 'ram' | 'status' | 'autoStart' | 'installError' | 'tps' | 'players' | 'startedAt' | 'restartOnCrash' | 'problem'>) => Promise<void>;
   startServer: (id: string) => Promise<void>;
   stopServer: (id: string) => Promise<void>;
   killServer: (id: string) => Promise<void>;
@@ -129,7 +139,7 @@ export const ServerProvider = ({ children }: { children: ReactNode }) => {
   }, [refreshServers, pollInterval]);
 
   // Create a new server via API
-  const addServer = async (newServer: Omit<Server, 'id' | 'cpu' | 'ram' | 'status' | 'autoStart' | 'installError'>) => {
+  const addServer = async (newServer: Omit<Server, 'id' | 'cpu' | 'ram' | 'status' | 'autoStart' | 'installError' | 'tps' | 'players' | 'startedAt' | 'restartOnCrash' | 'problem'>) => {
     await apiRequest(`${API_BASE}/api/servers`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

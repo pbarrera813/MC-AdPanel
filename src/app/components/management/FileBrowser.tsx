@@ -1,13 +1,31 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Server, FileEntry } from '../../context/ServerContext';
-import { Folder, ChevronRight, FileText, Upload, Plus, Trash2, Home, Loader2, ArrowLeft, Download, CheckSquare, Square, Check, Pencil, Search, Maximize2, Minimize2 } from 'lucide-react';
+import { Server, FileEntry, useServer } from '../../context/ServerContext';
+import { Folder, ChevronRight, FileText, Upload, Plus, Trash2, Home, Loader2, ArrowLeft, Download, CheckSquare, Square, Check, Pencil, Search, Maximize2, Minimize2, History } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { Modal } from '../ui/modal';
 import clsx from 'clsx';
 import { toast } from 'sonner';
 import { useEscapeKey } from '../../hooks/useEscapeKey';
 import { Checkbox } from '../ui/checkbox';
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '../ui/dropdown-menu';
 import { useStagedDeleteUndo } from '../../hooks/useStagedDeleteUndo';
 import { apiRequest, toErrorMessage } from '../../lib/api';
+
+interface FileVersion {
+  id: string;
+  savedAt: string;
+  size: number;
+}
+
+const formatVersionLabel = (version: FileVersion) => {
+  const saved = new Date(version.savedAt);
+  const time = saved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const day = saved.toDateString() === new Date().toDateString()
+    ? 'Today'
+    : saved.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  const size = version.size < 1024 ? `${version.size} B` : `${(version.size / 1024).toFixed(1)} KB`;
+  return `${day} ${time} - ${size}`;
+};
 
 interface FileBrowserProps {
   server: Server;
@@ -68,9 +86,9 @@ interface FileSystemDirectoryEntryLike extends FileSystemEntryLike {
   };
 }
 
-interface DataTransferItemWithEntry extends DataTransferItem {
+type DataTransferItemWithEntry = DataTransferItem & {
   webkitGetAsEntry?: () => FileSystemEntryLike | null;
-}
+};
 
 type EditorLanguage = 'json' | 'yaml' | 'toml' | 'properties' | 'ini' | 'xml' | 'log' | 'plain';
 
@@ -189,6 +207,7 @@ const renderSyntaxLine = (line: string, language: EditorLanguage): React.ReactNo
 };
 
 export const FileBrowser = ({ server }: FileBrowserProps) => {
+  const { refreshServers } = useServer();
   const indentUnit = '    ';
   const [currentPath, setCurrentPath] = useState('.');
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -198,11 +217,14 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
   // Modals state
   const [editingFile, setEditingFile] = useState<{ path: string; content: string } | null>(null);
   const [editContent, setEditContent] = useState('');
+  const [discardPromptOpen, setDiscardPromptOpen] = useState(false);
+  const [fileVersions, setFileVersions] = useState<FileVersion[] | null>(null);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [uploadMaxBytes, setUploadMaxBytes] = useState(256 * 1024 * 1024);
   const [isNewFolderModalOpen, setIsNewFolderModalOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('New Folder');
   const [isUploading, setIsUploading] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadTotalItems, setUploadTotalItems] = useState(0);
   const [uploadConflict, setUploadConflict] = useState<UploadConflictState | null>(null);
@@ -311,7 +333,8 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
     });
   }, [getRenameSelectionRange, isRenameModalOpen, renameTarget, renameTargetType]);
 
-  useEscapeKey(!!editingFile, () => setEditingFile(null));
+  useEscapeKey(!!editingFile && !discardPromptOpen, () => requestCloseEditor());
+  useEscapeKey(discardPromptOpen, () => setDiscardPromptOpen(false));
   useEscapeKey(isUploadModalOpen, () => setIsUploadModalOpen(false));
   useEscapeKey(!!uploadConflict, () => {
     if (uploadConflictResolverRef.current) {
@@ -424,6 +447,8 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
       const content = await res.text();
       setEditingFile({ path: filePath, content });
       setEditContent(content);
+      setFileVersions(null);
+      setDiscardPromptOpen(false);
       setEditorSearch('');
       setActiveSearchMatch(0);
       setIsEditorMaximized(false);
@@ -523,7 +548,47 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
     return parts;
   }, [editContent, editorSearch, searchMatches, activeSearchMatch, editorLanguage]);
 
-  const handleSaveFile = async () => {
+  const isDirty = !!editingFile && editContent !== editingFile.content;
+
+  const requestCloseEditor = () => {
+    if (isDirty) {
+      setDiscardPromptOpen(true);
+    } else {
+      setEditingFile(null);
+    }
+  };
+
+  const loadFileVersions = async () => {
+    if (!editingFile) return;
+    try {
+      setFileVersions(
+        await apiRequest<FileVersion[]>(
+          `/api/servers/${server.id}/files/versions?path=${encodeURIComponent(editingFile.path)}`,
+          undefined,
+          'Failed to load previous versions'
+        )
+      );
+    } catch (err) {
+      setFileVersions([]);
+      toast.error(toErrorMessage(err, 'Failed to load previous versions'));
+    }
+  };
+
+  const handleLoadVersion = async (version: FileVersion) => {
+    if (!editingFile) return;
+    try {
+      const res = await fetch(
+        `/api/servers/${server.id}/files/versions/content?path=${encodeURIComponent(editingFile.path)}&id=${encodeURIComponent(version.id)}`
+      );
+      if (!res.ok) throw new Error('Failed to read version');
+      setEditContent(await res.text());
+      toast.info(`Loaded version from ${formatVersionLabel(version).split(' - ')[0]}. Press Save to keep it.`);
+    } catch {
+      toast.error('Failed to load that version');
+    }
+  };
+
+  const handleSaveFile = async (keepOpen = false) => {
     if (!editingFile) return;
     setSaving(true);
     try {
@@ -537,13 +602,41 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
         'Failed to save file'
       );
       toast.success('File saved');
-      setEditingFile(null);
+      void refreshServers();
+      if (keepOpen) {
+        setEditingFile({ path: editingFile.path, content: editContent });
+        setFileVersions(null);
+      } else {
+        setEditingFile(null);
+      }
     } catch (err) {
       toast.error(toErrorMessage(err, 'Failed to save file'));
     } finally {
       setSaving(false);
     }
   };
+
+  useEffect(() => {
+    if (!editingFile) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (isDirty && !saving) handleSaveFile(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  });
+
+  useEffect(() => {
+    if (!isDirty) return;
+    const warnBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
+  }, [isDirty]);
 
   const handleDelete = () => {
     if (selectedNames.size === 0) return;
@@ -865,6 +958,7 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
       }
       setIsUploadModalOpen(false);
       fetchFiles();
+      void refreshServers();
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         toast.info('Upload cancelled');
@@ -972,6 +1066,7 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
 
   const handleDropUpload = async (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
+    setIsDragOver(false);
     try {
       const items = await extractUploadItemsFromDataTransfer(e.dataTransfer);
       if (items.length === 0) {
@@ -1044,6 +1139,7 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
       setIsRenameModalOpen(false);
       setSelectedNames(new Set());
       fetchFiles();
+      void refreshServers();
     } catch (err) {
       toast.error(toErrorMessage(err, 'Failed to rename'));
     } finally {
@@ -1249,41 +1345,30 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
         )}
       </div>
 
-      <AnimatePresence>
-        {deleteConfirmOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-[#252524] border border-red-900/50 rounded-lg shadow-2xl p-6"
-            >
-              <h3 className="text-xl font-bold text-white mb-3">Delete selected items?</h3>
-              <p className="text-gray-300 mb-6">
-                {selectedNames.size > 1
-                  ? 'Are you sure you want to delete the chosen files?'
-                  : 'Are you sure you want to delete the chosen file?'}
-              </p>
-              <div className="flex justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={() => setDeleteConfirmOpen(false)}
-                  className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleConfirmDelete}
-                  className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold"
-                >
-                  Confirm
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <Modal open={deleteConfirmOpen} tone="danger">
+        <h3 className="text-xl font-bold text-white mb-3">Delete selected items?</h3>
+        <p className="text-gray-300 mb-6">
+          {selectedNames.size > 1
+            ? 'Are you sure you want to delete the chosen files?'
+            : 'Are you sure you want to delete the chosen file?'}
+        </p>
+        <div className="flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={() => setDeleteConfirmOpen(false)}
+            className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleConfirmDelete}
+            className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold"
+          >
+            Confirm
+          </button>
+        </div>
+      </Modal>
 
       {/* Editor Modal */}
       <AnimatePresence>
@@ -1307,6 +1392,12 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <span className="font-mono text-white flex items-center gap-2 truncate min-w-0">
                   <FileText size={16} /> {editingFile.path}
+                  {isDirty && (
+                    <span className="flex shrink-0 items-center gap-1.5 font-sans text-[11px] text-[#E5B80B]">
+                      <span className="h-1.5 w-1.5 rounded-full bg-[#E5B80B]" aria-hidden />
+                      Unsaved changes
+                    </span>
+                  )}
                   </span>
                   <div className="flex flex-wrap items-center gap-2 md:justify-end">
                     <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
@@ -1353,15 +1444,42 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
                         {isEditorMaximized ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
                         {isEditorMaximized ? 'Restore' : 'Maximize'}
                       </button>
+                      <DropdownMenu onOpenChange={(open) => { if (open) loadFileVersions(); }}>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            className="px-3 py-1 text-xs bg-[#333] text-gray-300 rounded hover:bg-[#444] flex items-center gap-1"
+                            title="Restore a previous version"
+                          >
+                            <History size={12} />
+                            Versions
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="bg-[#252524] border-[#404040] text-gray-200">
+                          {fileVersions === null ? (
+                            <DropdownMenuItem disabled>Loading...</DropdownMenuItem>
+                          ) : fileVersions.length === 0 ? (
+                            <DropdownMenuItem disabled>No previous versions yet</DropdownMenuItem>
+                          ) : (
+                            fileVersions.map((version) => (
+                              <DropdownMenuItem key={version.id} onSelect={() => handleLoadVersion(version)}>
+                                {formatVersionLabel(version)}
+                              </DropdownMenuItem>
+                            ))
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                       <button
-                        onClick={handleSaveFile}
+                        onClick={() => handleSaveFile()}
                         disabled={saving}
-                        className="px-3 py-1 text-xs bg-[#E5B80B] text-black rounded font-bold hover:bg-[#d4a90a] disabled:opacity-50"
+                        className={clsx(
+                          'px-3 py-1 text-xs rounded disabled:opacity-50',
+                          isDirty ? 'bg-[#E5B80B] text-black font-bold hover:bg-[#d4a90a]' : 'bg-[#333] text-gray-300 hover:bg-[#444]'
+                        )}
                       >
                         {saving ? 'Saving...' : 'Save'}
                       </button>
                       <button
-                        onClick={() => setEditingFile(null)}
+                        onClick={requestCloseEditor}
                         className="px-3 py-1 text-xs bg-[#333] text-gray-300 rounded hover:bg-[#444]"
                       >
                         Close
@@ -1446,271 +1564,272 @@ export const FileBrowser = ({ server }: FileBrowserProps) => {
         )}
       </AnimatePresence>
 
-      {/* Upload Modal */}
-      <AnimatePresence>
-        {isUploadModalOpen && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-lg bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6 relative"
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={handleDropUpload}
-            >
-              <h3 className="text-xl font-bold text-white mb-4">Upload Files</h3>
-              {isUploading ? (
-                <div className="h-48 flex flex-col justify-center gap-4">
-                  <div className="flex items-center justify-between text-sm">
-                    <p className="text-gray-300">
-                      {uploadTotalItems <= 1 ? 'Uploading file...' : 'Uploading files...'}
-                    </p>
-                    <span className="text-[#E5B80B] font-bold">{uploadProgress}%</span>
-                  </div>
-                  <div className="w-full h-2 bg-[#1a1a1a] border border-[#3a3a3a] rounded overflow-hidden">
-                    <div
-                      className="h-full bg-[#E5B80B] transition-[width] duration-200 ease-out"
-                      style={{ width: `${uploadProgress}%` }}
-                    />
-                  </div>
-                  <p className="text-xs text-gray-500">
-                    {uploadTotalItems <= 1 ? 'Please wait while the upload finishes.' : `Processing ${uploadTotalItems} items...`}
-                  </p>
-                </div>
-              ) : (
-                <div
-                  className="border-2 border-dashed border-[#404040] rounded-lg h-48 flex flex-col items-center justify-center text-gray-400 mb-6 cursor-pointer hover:border-[#E5B80B] hover:text-[#E5B80B] transition-colors bg-[#202020]"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    multiple
-                    className="hidden"
-                    onChange={(e) => handleFileUpload(e.target.files)}
-                  />
-                  <input
-                    ref={folderInputRef}
-                    type="file"
-                    multiple
-                    className="hidden"
-                    {...({ webkitdirectory: '', directory: '' } as any)}
-                    onChange={(e) => handleFileUpload(e.target.files)}
-                  />
-                  <Upload size={32} className="mb-2" />
-                  <p>Drag & drop files or folders here</p>
-                  <p className="text-xs text-gray-600 mt-2">Click to choose files, or use the folder button below</p>
-                  <p className="text-xs text-gray-600 mt-1">Maximum file size: 256MB</p>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      folderInputRef.current?.click();
-                    }}
-                    className="mt-3 px-3 py-1.5 text-xs border border-[#3a3a3a] rounded bg-[#1a1a1a] text-gray-300 hover:border-[#E5B80B] hover:text-[#E5B80B] transition-colors"
-                  >
-                    Choose Folder
-                  </button>
-                </div>
-              )}
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={handleCancelUpload}
-                  className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
-                >
-                  {isUploading ? 'Cancel Upload' : 'Cancel'}
-                </button>
+      <Modal open={discardPromptOpen} size="sm" scope="container" tone="accent">
+        <h3 className="text-xl font-bold text-white mb-3">Discard unsaved changes?</h3>
+        <p className="text-gray-300 mb-6">
+          You have changes in <span className="font-mono text-white break-all">{editingFile?.path}</span> that are not saved.
+        </p>
+        <div className="flex justify-end gap-3">
+          <button
+            onClick={() => setDiscardPromptOpen(false)}
+            className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
+          >
+            Keep editing
+          </button>
+          <button
+            onClick={() => { setDiscardPromptOpen(false); setEditingFile(null); }}
+            className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold"
+          >
+            Discard
+          </button>
+          <button
+            onClick={() => { setDiscardPromptOpen(false); handleSaveFile(); }}
+            className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold"
+          >
+            Save
+          </button>
+        </div>
+      </Modal>
+
+      <Modal open={isUploadModalOpen} size="lg" scope="container" className="relative p-0">
+        <div className="p-6" onDragOver={(e) => e.preventDefault()} onDrop={handleDropUpload}>
+          <h3 className="text-xl font-bold text-white mb-4">Upload Files</h3>
+          {isUploading ? (
+            <div className="h-48 flex flex-col justify-center gap-4">
+              <div className="flex items-center justify-between text-sm">
+                <p className="text-gray-300">
+                  {uploadTotalItems <= 1 ? 'Uploading file...' : 'Uploading files...'}
+                </p>
+                <span className="text-[#E5B80B] font-bold">{uploadProgress}%</span>
               </div>
-
-              <AnimatePresence>
-                {uploadConflict && (
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="absolute inset-0 z-10 bg-black/55 backdrop-blur-[1px] rounded-lg flex items-center justify-center p-4"
-                  >
-                    <motion.div
-                      initial={{ y: 8, scale: 0.98 }}
-                      animate={{ y: 0, scale: 1 }}
-                      exit={{ y: 8, scale: 0.98 }}
-                      className="w-full max-w-md bg-[#202020] border border-[#404040] rounded-lg p-4"
-                    >
-	                      <p className="text-sm text-gray-200">
-	                        The destination already has a file named "{uploadConflict.name}".
-	                      </p>
-                        {uploadTotalItems > 1 && (
-                          <label className="mt-4 flex items-center gap-2 text-sm text-gray-300">
-                            <Checkbox
-                              checked={applyConflictActionToAll}
-                              onCheckedChange={(checked) => setApplyConflictActionToAll(checked === true)}
-                            />
-                            Apply the same instruction to all files?
-                          </label>
-                        )}
-	                      <div className="mt-4 flex justify-end gap-2">
-	                        <button
-	                          onClick={() => {
-	                            uploadConflictResolverRef.current?.('skip');
-	                            uploadConflictResolverRef.current = null;
-	                            setUploadConflict(null);
-                              if (applyConflictActionToAll) {
-                                uploadConflictBatchActionRef.current = 'skip';
-                              }
-	                          }}
-                          className="px-3 py-1.5 bg-[#333] hover:bg-[#404040] text-gray-200 rounded text-sm"
-                        >
-                          Skip
-                        </button>
-	                        <button
-	                          onClick={() => {
-	                            uploadConflictResolverRef.current?.('replace');
-	                            uploadConflictResolverRef.current = null;
-	                            setUploadConflict(null);
-                              if (applyConflictActionToAll) {
-                                uploadConflictBatchActionRef.current = 'replace';
-                              }
-	                          }}
-                          className="px-3 py-1.5 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded text-sm font-bold"
-                        >
-                          Replace
-                        </button>
-                      </div>
-                    </motion.div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* New Folder Modal */}
-      <AnimatePresence>
-        {isNewFolderModalOpen && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="relative w-full max-w-md bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6"
-            >
-              <h3 className="text-xl font-bold text-white mb-4">Create New Folder</h3>
-              <div className="mb-6">
-                <label className="block text-sm text-gray-400 mb-2">Folder Name</label>
-                <input
-                  type="text"
-                  value={newFolderName}
-                  onChange={(e) => setNewFolderName(e.target.value)}
-                  className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B] focus:ring-1 focus:ring-[#E5B80B]"
-                  autoFocus
-                  onKeyDown={(e) => e.key === 'Enter' && handleNewFolder()}
+              <div className="w-full h-2 bg-[#1a1a1a] border border-[#3a3a3a] rounded overflow-hidden">
+                <div
+                  className="h-full bg-[#E5B80B] transition-[width] duration-200 ease-out"
+                  style={{ width: `${uploadProgress}%` }}
                 />
               </div>
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={() => setIsNewFolderModalOpen(false)}
-                  className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleNewFolder}
-                  className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold"
-                >
-                  Create
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* Rename Modal */}
-      <AnimatePresence>
-        {isRenameModalOpen && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6"
+              <p className="text-xs text-gray-500">
+                {uploadTotalItems <= 1 ? 'Please wait while the upload finishes.' : `Processing ${uploadTotalItems} items...`}
+              </p>
+            </div>
+          ) : (
+            <div
+              className={clsx(
+                'border-2 border-dashed rounded-lg h-48 flex flex-col items-center justify-center mb-6 cursor-pointer transition-colors',
+                isDragOver
+                  ? 'border-[#E5B80B] text-[#E5B80B] bg-[#E5B80B]/10'
+                  : 'border-[#404040] text-gray-400 bg-[#202020] hover:border-[#E5B80B] hover:text-[#E5B80B]'
+              )}
+              onClick={() => fileInputRef.current?.click()}
+              onDragEnter={() => setIsDragOver(true)}
+              onDragOver={() => setIsDragOver(true)}
+              onDragLeave={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setIsDragOver(false);
+              }}
             >
-              <h3 className="text-xl font-bold text-white mb-4">Rename</h3>
-              <div className="mb-6">
-                <label className="block text-sm text-gray-400 mb-2">New Name</label>
-                <input
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => handleFileUpload(e.target.files)}
+              />
+              <input
+                ref={folderInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                {...({ webkitdirectory: '', directory: '' } as any)}
+                onChange={(e) => handleFileUpload(e.target.files)}
+              />
+              <Upload size={32} className="mb-2" />
+              <p>{isDragOver ? 'Release to upload' : 'Drag & drop files or folders here'}</p>
+              <p className="text-xs text-gray-600 mt-2">Click to choose files, or use the folder button below</p>
+              <p className="text-xs text-gray-600 mt-1">Maximum file size: 256MB</p>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  folderInputRef.current?.click();
+                }}
+                className="mt-3 px-3 py-1.5 text-xs border border-[#3a3a3a] rounded bg-[#1a1a1a] text-gray-300 hover:border-[#E5B80B] hover:text-[#E5B80B] transition-colors"
+              >
+                Choose Folder
+              </button>
+            </div>
+          )}
+          <div className="flex justify-end gap-3">
+            <button
+              onClick={handleCancelUpload}
+              className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
+            >
+              {isUploading ? 'Cancel Upload' : 'Cancel'}
+            </button>
+          </div>
+
+          <AnimatePresence>
+            {uploadConflict && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 z-10 bg-black/55 backdrop-blur-[1px] rounded-lg flex items-center justify-center p-4"
+              >
+                <motion.div
+                  initial={{ y: 8, scale: 0.98 }}
+                  animate={{ y: 0, scale: 1 }}
+                  exit={{ y: 8, scale: 0.98 }}
+                  className="w-full max-w-md bg-[#202020] border border-[#404040] rounded-lg p-4"
+                >
+  	                      <p className="text-sm text-gray-200">
+  	                        The destination already has a file named "{uploadConflict.name}".
+  	                      </p>
+                    {uploadTotalItems > 1 && (
+                      <label className="mt-4 flex items-center gap-2 text-sm text-gray-300">
+                        <Checkbox
+                          checked={applyConflictActionToAll}
+                          onCheckedChange={(checked) => setApplyConflictActionToAll(checked === true)}
+                        />
+                        Apply the same instruction to all files?
+                      </label>
+                    )}
+  	                      <div className="mt-4 flex justify-end gap-2">
+  	                        <button
+  	                          onClick={() => {
+  	                            uploadConflictResolverRef.current?.('skip');
+  	                            uploadConflictResolverRef.current = null;
+  	                            setUploadConflict(null);
+                          if (applyConflictActionToAll) {
+                            uploadConflictBatchActionRef.current = 'skip';
+                          }
+  	                          }}
+                      className="px-3 py-1.5 bg-[#333] hover:bg-[#404040] text-gray-200 rounded text-sm"
+                    >
+                      Skip
+                    </button>
+  	                        <button
+  	                          onClick={() => {
+  	                            uploadConflictResolverRef.current?.('replace');
+  	                            uploadConflictResolverRef.current = null;
+  	                            setUploadConflict(null);
+                          if (applyConflictActionToAll) {
+                            uploadConflictBatchActionRef.current = 'replace';
+                          }
+  	                          }}
+                      className="px-3 py-1.5 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded text-sm font-bold"
+                    >
+                      Replace
+                    </button>
+                  </div>
+                </motion.div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </Modal>
+
+      <Modal open={isNewFolderModalOpen} scope="container" className="relative">
+        <h3 className="text-xl font-bold text-white mb-4">Create New Folder</h3>
+        <div className="mb-6">
+          <label className="block text-sm text-gray-400 mb-2">Folder Name</label>
+          <input
+            type="text"
+            value={newFolderName}
+            onChange={(e) => setNewFolderName(e.target.value)}
+            className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B] focus:ring-1 focus:ring-[#E5B80B]"
+            autoFocus
+            onKeyDown={(e) => e.key === 'Enter' && handleNewFolder()}
+          />
+        </div>
+        <div className="flex justify-end gap-3">
+          <button
+            onClick={() => setIsNewFolderModalOpen(false)}
+            className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleNewFolder}
+            className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold"
+          >
+            Create
+          </button>
+        </div>
+      </Modal>
+
+      <Modal open={isRenameModalOpen} scope="container">
+        <h3 className="text-xl font-bold text-white mb-4">Rename</h3>
+        <div className="mb-6">
+          <label className="block text-sm text-gray-400 mb-2">New Name</label>
+          <input
 	                  ref={renameInputRef}
 	                  type="text"
 	                  value={newName}
 	                  onChange={(e) => setNewName(e.target.value)}
-                  className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B] focus:ring-1 focus:ring-[#E5B80B]"
-                  autoFocus
-                  onKeyDown={(e) => e.key === 'Enter' && handleRename()}
-                  disabled={renaming}
-                />
-              </div>
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={() => {
-                    setRenameExtensionWarningOpen(false);
-                    setIsRenameModalOpen(false);
-                  }}
-                  className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
-                  disabled={renaming}
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleRename}
-                  className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold disabled:opacity-50"
-                  disabled={renaming || !newName.trim() || newName === renameTarget}
-                >
-                  {renaming ? 'Renaming...' : 'Rename'}
-                </button>
-              </div>
+            className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white focus:outline-none focus:border-[#E5B80B] focus:ring-1 focus:ring-[#E5B80B]"
+            autoFocus
+            onKeyDown={(e) => e.key === 'Enter' && handleRename()}
+            disabled={renaming}
+          />
+        </div>
+        <div className="flex justify-end gap-3">
+          <button
+            onClick={() => {
+              setRenameExtensionWarningOpen(false);
+              setIsRenameModalOpen(false);
+            }}
+            className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
+            disabled={renaming}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleRename}
+            className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold disabled:opacity-50"
+            disabled={renaming || !newName.trim() || newName === renameTarget}
+          >
+            {renaming ? 'Renaming...' : 'Rename'}
+          </button>
+        </div>
 
-              <AnimatePresence>
-                {renameExtensionWarningOpen && (
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="absolute inset-0 z-10 bg-black/55 backdrop-blur-[1px] rounded-lg flex items-center justify-center p-4"
+        <AnimatePresence>
+          {renameExtensionWarningOpen && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 z-10 bg-black/55 backdrop-blur-[1px] rounded-lg flex items-center justify-center p-4"
+            >
+              <motion.div
+                initial={{ y: 8, scale: 0.98 }}
+                animate={{ y: 0, scale: 1 }}
+                exit={{ y: 8, scale: 0.98 }}
+                className="w-full max-w-md bg-[#202020] border border-[#404040] rounded-lg p-4"
+              >
+                <p className="text-sm text-gray-200">
+                  Careful! changing the extension can lead to errors on your server.
+                </p>
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    onClick={() => setRenameExtensionWarningOpen(false)}
+                    className="px-3 py-1.5 bg-[#333] hover:bg-[#404040] text-gray-200 rounded text-sm"
+                    disabled={renaming}
                   >
-                    <motion.div
-                      initial={{ y: 8, scale: 0.98 }}
-                      animate={{ y: 0, scale: 1 }}
-                      exit={{ y: 8, scale: 0.98 }}
-                      className="w-full max-w-md bg-[#202020] border border-[#404040] rounded-lg p-4"
-                    >
-                      <p className="text-sm text-gray-200">
-                        Careful! changing the extension can lead to errors on your server.
-                      </p>
-                      <div className="mt-4 flex justify-end gap-2">
-                        <button
-                          onClick={() => setRenameExtensionWarningOpen(false)}
-                          className="px-3 py-1.5 bg-[#333] hover:bg-[#404040] text-gray-200 rounded text-sm"
-                          disabled={renaming}
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          onClick={performRename}
-                          className="px-3 py-1.5 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded text-sm font-bold"
-                          disabled={renaming}
-                        >
-                          Accept
-                        </button>
-                      </div>
-                    </motion.div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+                    Cancel
+                  </button>
+                  <button
+                    onClick={performRename}
+                    className="px-3 py-1.5 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded text-sm font-bold"
+                    disabled={renaming}
+                  >
+                    Accept
+                  </button>
+                </div>
+              </motion.div>
             </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+          )}
+        </AnimatePresence>
+      </Modal>
       {undoOverlay}
     </div>
   );

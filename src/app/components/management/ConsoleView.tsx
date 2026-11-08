@@ -63,6 +63,26 @@ const persistConsoleLogs = (serverId: string, lines: ConsoleLogEntry[]) => {
   }
 };
 
+const maxCommandHistory = 50;
+const getHistoryKey = (serverId: string) => `orexa.console.history.${serverId}`;
+
+const loadCommandHistory = (serverId: string): string[] => {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(getHistoryKey(serverId)) || '[]');
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string').slice(-maxCommandHistory) : [];
+  } catch {
+    return [];
+  }
+};
+
+const saveCommandHistory = (serverId: string, commands: string[]) => {
+  try {
+    window.localStorage.setItem(getHistoryKey(serverId), JSON.stringify(commands));
+  } catch {
+    // Ignore storage quota/availability failures.
+  }
+};
+
 const mergeLogsBySeq = (prev: ConsoleLogEntry[], incoming: ConsoleLogEntry[]): ConsoleLogEntry[] => {
   if (incoming.length === 0) return prev;
   const existing = new Set(prev.map((entry) => entry.seq));
@@ -241,24 +261,19 @@ export const ConsoleView = ({ server }: ConsoleViewProps) => {
   const [input, setInput] = useState('');
   const [autoScroll, setAutoScroll] = useState(true);
   const [connected, setConnected] = useState(false);
+  const [wsReconnectTick, setWsReconnectTick] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
   const lastSeqRef = useRef(logs.length > 0 ? logs[logs.length - 1].seq : 0);
   const previousStatusRef = useRef(server.status);
+  const historyRef = useRef<string[]>([]);
+  const historyIndexRef = useRef(-1);
+  const draftRef = useRef('');
 
   useEffect(() => {
-    const cached = consoleLogsCache.get(server.id);
-    if (cached) {
-      setLogs(cached);
-      previousStatusRef.current = server.status;
-      return;
-    }
-    const persisted = loadPersistedConsoleLogs(server.id);
-    consoleLogsCache.set(server.id, persisted);
-    setLogs(persisted);
-    setAutoScroll(true);
-    setInput('');
-    previousStatusRef.current = server.status;
+    historyRef.current = loadCommandHistory(server.id);
+    historyIndexRef.current = -1;
   }, [server.id]);
 
   useEffect(() => {
@@ -266,6 +281,15 @@ export const ConsoleView = ({ server }: ConsoleViewProps) => {
     consoleLogsCache.set(server.id, logs);
     persistConsoleLogs(server.id, logs);
   }, [server.id, logs]);
+
+  useEffect(() => {
+    return () => {
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const previousStatus = previousStatusRef.current;
@@ -287,24 +311,46 @@ export const ConsoleView = ({ server }: ConsoleViewProps) => {
 
   // WebSocket connection for real-time console logs
   useEffect(() => {
+    const clearReconnectTimer = () => {
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+    };
+    const scheduleReconnect = () => {
+      if (server.status !== 'Running' && server.status !== 'Booting') return;
+      if (reconnectTimerRef.current !== null) return;
+      reconnectTimerRef.current = window.setTimeout(() => {
+        reconnectTimerRef.current = null;
+        setWsReconnectTick((prev) => prev + 1);
+      }, 1200);
+    };
+
     // Only connect when server is Running or Booting
     if (server.status !== 'Running' && server.status !== 'Booting') {
+      clearReconnectTimer();
       setConnected(false);
       return;
     }
 
+    clearReconnectTimer();
     const loc = window.location;
     const protocol = loc.protocol === 'https:' ? 'wss:' : 'ws:';
     const lastSeq = lastSeqRef.current;
     const wsUrl = `${protocol}//${loc.host}/api/logs/${server.id}?lastSeq=${lastSeq}`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
+    let allowReconnect = true;
 
+    // A closed socket reports its close late; once this effect is cleaned up its events must not touch state.
     ws.onopen = () => {
+      if (!allowReconnect) return;
+      clearReconnectTimer();
       setConnected(true);
     };
 
     ws.onmessage = (event) => {
+      if (!allowReconnect) return;
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'snapshot' && Array.isArray(data.entries)) {
@@ -341,18 +387,39 @@ export const ConsoleView = ({ server }: ConsoleViewProps) => {
     };
 
     ws.onclose = () => {
+      if (!allowReconnect) return;
       setConnected(false);
+      scheduleReconnect();
     };
 
     ws.onerror = () => {
+      if (!allowReconnect) return;
       setConnected(false);
+      scheduleReconnect();
     };
 
     return () => {
+      allowReconnect = false;
       ws.close();
-      wsRef.current = null;
+      if (wsRef.current === ws) {
+        wsRef.current = null;
+      }
     };
-  }, [server.id, server.status]);
+  }, [server.id, server.status, wsReconnectTick]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (server.status !== 'Running' && server.status !== 'Booting') return;
+      if (connected) return;
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
+      setWsReconnectTick((prev) => prev + 1);
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [server.status, connected]);
 
   // Auto-scroll effect
   useEffect(() => {
@@ -371,7 +438,40 @@ export const ConsoleView = ({ server }: ConsoleViewProps) => {
       wsRef.current.send(command);
     }
 
+    const history = historyRef.current;
+    if (history[history.length - 1] !== command) {
+      historyRef.current = [...history, command].slice(-maxCommandHistory);
+      saveCommandHistory(server.id, historyRef.current);
+    }
+    historyIndexRef.current = -1;
     setInput('');
+  };
+
+  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    const history = historyRef.current;
+    if (history.length === 0) return;
+    e.preventDefault();
+
+    if (e.key === 'ArrowUp') {
+      if (historyIndexRef.current === -1) {
+        draftRef.current = input;
+        historyIndexRef.current = history.length - 1;
+      } else {
+        historyIndexRef.current = Math.max(0, historyIndexRef.current - 1);
+      }
+      setInput(history[historyIndexRef.current]);
+      return;
+    }
+
+    if (historyIndexRef.current === -1) return;
+    if (historyIndexRef.current >= history.length - 1) {
+      historyIndexRef.current = -1;
+      setInput(draftRef.current);
+    } else {
+      historyIndexRef.current += 1;
+      setInput(history[historyIndexRef.current]);
+    }
   };
 
   return (
@@ -415,7 +515,11 @@ export const ConsoleView = ({ server }: ConsoleViewProps) => {
             <input
               type="text"
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                historyIndexRef.current = -1;
+                setInput(e.target.value);
+              }}
+              onKeyDown={handleInputKeyDown}
               placeholder={connected ? "Type a command..." : "Console unavailable"}
               disabled={!connected}
               className="w-full bg-[#252524] border border-[#3a3a3a] rounded py-2 pl-6 pr-4 text-white focus:outline-none focus:border-[#E5B80B] disabled:opacity-50 disabled:cursor-not-allowed"

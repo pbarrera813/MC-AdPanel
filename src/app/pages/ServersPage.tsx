@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useServer } from '../context/ServerContext';
-import { Plus, Cpu, HardDrive, Play, Square, AlertTriangle, ArrowLeft, Check, ChevronDown, ChevronUp, ChevronRight, Loader2, RotateCw, Power, Settings2, X, Trash2, FileUp, Upload } from 'lucide-react';
+import type { ServerType } from '../context/ServerContext';
+import { Plus, Cpu, HardDrive, Play, Square, AlertTriangle, ArrowLeft, Check, ChevronDown, ChevronUp, ChevronRight, Loader2, ArrowUpDown, Settings2, X, Trash2, FileUp, Upload, Users, Clock, Search } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   DndContext,
@@ -11,7 +12,6 @@ import {
   type DragStartEvent,
   type DragOverEvent,
   type DragEndEvent,
-  type DragCancelEvent,
   useSensor,
   useSensors,
 } from '@dnd-kit/core';
@@ -38,7 +38,14 @@ import type {
   JVMFlagsPreset,
   VersionInfo,
 } from './servers/types';
+import { Checkbox } from '../components/ui/checkbox';
 import { SortableServerCard } from './servers/SortableServerCard';
+import { MiniSwitch } from './servers/MiniSwitch';
+import { ServerFilters } from './servers/ServerFilters';
+import { Uptime } from './servers/Uptime';
+import { countByStatus, matchesStatusFilter, searchServers, sortServers, type SortKey, type StatusFilter } from './servers/filters';
+import { JavaRuntimeHint } from '../components/JavaRuntimeHint';
+import { ProblemNotice } from '../components/ProblemNotice';
 
 interface ServersPageProps {
   onViewChange: (view: 'servers' | 'management' | 'plugins' | 'backups' | 'logs' | 'cloning') => void;
@@ -53,6 +60,9 @@ type SettingsDefaultsResponse = {
 export const ServersPage = ({ onViewChange }: ServersPageProps) => {
   const { servers, setActiveServerId, startServer, stopServer, addServer, reorderServers, refreshServers, loading } = useServer();
   const [isCreating, setIsCreating] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortKey, setSortKey] = useState<SortKey>('custom');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formDefaults, setFormDefaults] = useState({
     minRam: DEFAULT_CREATE_FORM.minRam,
@@ -63,8 +73,9 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
   const [versions, setVersions] = useState<VersionInfo[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [typeVersionCatalog, setTypeVersionCatalog] = useState<Record<string, VersionInfo[]>>({});
-  const [updatePopup, setUpdatePopup] = useState<{ serverId: string; serverName: string; currentVersion: string; selectedVersion: string; options: VersionInfo[] } | null>(null);
+  const [updatePopup, setUpdatePopup] = useState<{ serverId: string; serverName: string; currentVersion: string; selectedVersion: string; options: VersionInfo[]; hasWorlds: boolean } | null>(null);
   const [updatingVersion, setUpdatingVersion] = useState(false);
+  const [downgradeAck, setDowngradeAck] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [importDragActive, setImportDragActive] = useState(false);
   const [isImportUploading, setIsImportUploading] = useState(false);
@@ -161,11 +172,6 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
     return compareVersionStrings(latest, server.version) > 0;
   };
 
-  const versionsAboveCurrent = (server: typeof servers[number]) => {
-    const list = typeVersionCatalog[server.type] || [];
-    return list.filter(v => compareVersionStrings(v.version, server.version) > 0);
-  };
-
   const handleSelectServer = (id: string) => {
     if (Date.now() < suppressNextClickUntilRef.current) {
       return;
@@ -235,7 +241,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
     try {
       await addServer({
         name: formData.name || `My ${formData.type} Server`,
-        type: formData.type as any,
+        type: formData.type as ServerType,
         version: formData.version,
         port: parseInt(formData.port) || 25565,
         minRam: Math.round((parseFloat(formData.minRam) || 0.5) * 1024) + 'M',
@@ -302,7 +308,8 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
   const suppressNextClickUntilRef = useRef(0);
   const { stageDelete, undoOverlay } = useStagedDeleteUndo();
 
-  const reorderDisabled = deleteConfirm || pendingDeletedServerIds.size > 0;
+  const viewIsDefault = !searchQuery.trim() && statusFilter === 'all' && sortKey === 'custom';
+  const reorderDisabled = deleteConfirm || pendingDeletedServerIds.size > 0 || !viewIsDefault;
 
   const serverById = useMemo(() => {
     return new Map(servers.map((server) => [server.id, server]));
@@ -348,6 +355,13 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
     return orderedServers.filter((server) => !pendingDeletedServerIds.has(server.id));
   }, [orderedServers, pendingDeletedServerIds]);
 
+  const searchMatches = useMemo(() => searchServers(visibleServers, searchQuery), [visibleServers, searchQuery]);
+  const statusCounts = useMemo(() => countByStatus(searchMatches), [searchMatches]);
+  const shownServers = useMemo(
+    () => sortServers(searchMatches.filter((server) => matchesStatusFilter(server, statusFilter)), sortKey),
+    [searchMatches, statusFilter, sortKey]
+  );
+
   const commitReorderedServers = async () => {
     const startOrder = dragStartOrderRef.current;
     dragStartOrderRef.current = null;
@@ -367,7 +381,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
 
   const canDragServer = (serverId: string) => !reorderDisabled && selectedServerIds.has(serverId);
 
-  const visibleServerIds = useMemo(() => visibleServers.map((server) => server.id), [visibleServers]);
+  const visibleServerIds = useMemo(() => shownServers.map((server) => server.id), [shownServers]);
   const visibleServerIdSet = useMemo(() => new Set(visibleServerIds), [visibleServerIds]);
   const activeDragServer = useMemo(
     () => (draggingServerId ? serverById.get(draggingServerId) ?? null : null),
@@ -532,7 +546,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
   const openVersionPopup = async (server: typeof servers[number]) => {
     setContextMenu(null);
     if (server.status === 'Running') {
-      toast.error("Can't update while server is running.");
+      toast.error('Stop the server before changing its version.');
       return;
     }
 
@@ -547,18 +561,21 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
       }
     }
 
-    const options = (list || []).filter(v => compareVersionStrings(v.version, server.version) > 0);
+    const options = (list || []).filter(v => v.version !== server.version);
     if (options.length === 0) {
-      toast.info('Server is already on the latest version.');
+      toast.info('No other versions are available for this server type.');
       return;
     }
 
+    const defaultOption = options.find(v => compareVersionStrings(v.version, server.version) > 0) ?? options[0];
+    setDowngradeAck(false);
     setUpdatePopup({
       serverId: server.id,
       serverName: server.name,
       currentVersion: server.version,
-      selectedVersion: options[0].version,
+      selectedVersion: defaultOption.version,
       options,
+      hasWorlds: server.type !== 'Velocity',
     });
   };
 
@@ -569,18 +586,20 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
 
   const handleApplyVersionUpdate = async () => {
     if (!updatePopup) return;
+    const isDowngrade = compareVersionStrings(updatePopup.selectedVersion, updatePopup.currentVersion) < 0;
+    if (isDowngrade && updatePopup.hasWorlds && !downgradeAck) return;
     setUpdatingVersion(true);
     try {
       await apiRequest(`/api/servers/${updatePopup.serverId}/version`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ version: updatePopup.selectedVersion }),
-      }, 'Failed to update server version');
-      toast.info(`Updating to ${updatePopup.selectedVersion}...`);
+      }, 'Failed to change server version');
+      toast.info(`${isDowngrade ? 'Downgrading' : 'Updating'} to ${updatePopup.selectedVersion}...`);
       setUpdatePopup(null);
       await refreshServers();
     } catch (err) {
-      toast.error(toErrorMessage(err, 'Failed to update server version'));
+      toast.error(toErrorMessage(err, 'Failed to change server version'));
     } finally {
       setUpdatingVersion(false);
     }
@@ -928,6 +947,21 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
     }
   };
 
+  const handleToggleRestartOnCrash = async (e: React.MouseEvent, serverId: string, currentValue: boolean) => {
+    e.stopPropagation();
+    try {
+      await apiRequest(`/api/servers/${serverId}/restart-on-crash`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ restartOnCrash: !currentValue }),
+      }, 'Failed to update restart on crash');
+      await refreshServers();
+      toast.success(!currentValue ? 'Will restart automatically after a crash' : 'Will not restart after a crash');
+    } catch (err) {
+      toast.error(toErrorMessage(err, 'Failed to update restart on crash'));
+    }
+  };
+
   useEscapeKey(deleteConfirm, () => setDeleteConfirm(false));
   useEscapeKey(!!flagsPopup, () => setFlagsPopup(null));
   useEscapeKey(!!updatePopup, () => setUpdatePopup(null));
@@ -951,7 +985,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
   const contextMenuServer = contextMenu ? servers.find((server) => server.id === contextMenu.serverId) || null : null;
 
   const renderServerCardContent = (server: (typeof servers)[number], interactive: boolean) => {
-    const showUpdateButton = serverHasNewerVersion(server);
+    const updateAvailable = serverHasNewerVersion(server);
     const statusBadgeClass =
       server.status === 'Running'
         ? 'bg-green-900/30 text-green-400'
@@ -1026,29 +1060,40 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
             </div>
             <div className="text-lg font-mono text-white">{server.status === 'Running' ? `${Math.round(server.ram)}%` : '-'}</div>
           </div>
+          <div className="bg-[#1a1a1a] p-3 rounded border border-[#333]">
+            <div className="flex items-center gap-2 text-gray-400 text-xs mb-1">
+              <Users size={14} /> Players
+            </div>
+            <div className="text-lg font-mono text-white">{server.status === 'Running' ? `${server.players}/${server.maxPlayers}` : '-'}</div>
+          </div>
+          <div className="bg-[#1a1a1a] p-3 rounded border border-[#333]">
+            <div className="flex items-center gap-2 text-gray-400 text-xs mb-1">
+              <Clock size={14} /> Uptime
+            </div>
+            <div className="text-lg font-mono text-white">{server.status === 'Running' ? <Uptime startedAt={server.startedAt} /> : '-'}</div>
+          </div>
         </div>
 
-        {server.status === 'Error' && server.installError && (
-          <div className="mt-3 text-xs text-red-400 bg-red-900/10 border border-red-900/30 rounded p-2 truncate" title={server.installError}>
-            {server.installError}
-          </div>
+        {(server.status === 'Error' || server.status === 'Crashed') && server.problem && (
+          <ProblemNotice problem={server.problem} className="mt-3" />
         )}
 
         <div className="mt-4 pt-4 border-t border-[#333] flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={interactive ? (e) => handleToggleAutoStart(e, server.id, server.autoStart) : undefined}
-              className="flex items-center gap-1.5 group/auto"
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <MiniSwitch
+              checked={server.autoStart}
+              label="Auto Start"
               title={server.autoStart ? 'Auto-start enabled' : 'Auto-start disabled'}
+              onClick={interactive ? (e) => handleToggleAutoStart(e, server.id, server.autoStart) : undefined}
               disabled={!interactive}
-            >
-              <div className={clsx('relative w-8 h-4 rounded-full transition-colors', server.autoStart ? 'bg-[#E5B80B]' : 'bg-[#3a3a3a]')}>
-                <div className={clsx('absolute top-0.5 w-3 h-3 rounded-full transition-all', server.autoStart ? 'left-4.5 bg-black' : 'left-0.5 bg-gray-500')} />
-              </div>
-              <span className={clsx('text-[10px] font-medium transition-colors', server.autoStart ? 'text-[#E5B80B]' : 'text-gray-500 group-hover/auto:text-gray-400')}>
-                Auto Start
-              </span>
-            </button>
+            />
+            <MiniSwitch
+              checked={server.restartOnCrash}
+              label="Restart on crash"
+              title={server.restartOnCrash ? 'Restarts automatically if it crashes' : 'Does not restart after a crash'}
+              onClick={interactive ? (e) => handleToggleRestartOnCrash(e, server.id, server.restartOnCrash) : undefined}
+              disabled={!interactive}
+            />
 
             <button
               onClick={interactive ? (e) => handleOpenFlagsPopup(e, server) : undefined}
@@ -1060,17 +1105,17 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
               <span>JVM Flags</span>
             </button>
 
-            {showUpdateButton && (
-              <button
-                onClick={interactive ? (e) => handleOpenVersionPopup(e, server) : undefined}
-                className="flex items-center gap-1 text-[10px] font-medium text-gray-500 hover:text-[#E5B80B] transition-colors"
-                title="Update server version"
-                disabled={!interactive}
-              >
-                <RotateCw size={12} />
-                <span>Update version</span>
-              </button>
-            )}
+            <button
+              onClick={interactive ? (e) => handleOpenVersionPopup(e, server) : undefined}
+              className="flex items-center gap-1 text-[10px] font-medium text-gray-500 hover:text-[#E5B80B] transition-colors"
+              title="Update or downgrade the server version"
+              aria-label={updateAvailable ? 'Manage version (update available)' : 'Manage version'}
+              disabled={!interactive}
+            >
+              <ArrowUpDown size={12} />
+              <span>Manage version</span>
+              {updateAvailable && <span className="h-1.5 w-1.5 rounded-full bg-[#E5B80B]" title="Update available" aria-hidden />}
+            </button>
           </div>
 
           <button
@@ -1079,12 +1124,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
                 ? (e) => {
                     e.stopPropagation();
                     if (server.status === 'Error') {
-                      apiRequest<void>(`/api/servers/${server.id}/retry-install`, { method: 'POST' }, 'Couldn’t retry installation. Try again.')
-                        .then(() => {
-                          toast.success('Retrying installation...');
-                          refreshServers();
-                        })
-                        .catch(() => toast.error('Couldn’t retry installation. Try again.'));
+                      handleRetryInstall(server.id);
                     } else {
                       handleToggleStatus(e, server.id, server.status);
                     }
@@ -1241,6 +1281,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
                       <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" size={18} />
                     )}
                   </div>
+                  <JavaRuntimeHint type={formData.type} version={formData.version} />
                 </div>
 
                 <div className={clsx("transition-opacity duration-200", !formData.type && "opacity-50 grayscale")}>
@@ -1389,6 +1430,19 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
         </div>
       </div>
 
+      {visibleServers.length > 1 && (
+        <ServerFilters
+          query={searchQuery}
+          onQueryChange={setSearchQuery}
+          status={statusFilter}
+          onStatusChange={setStatusFilter}
+          sort={sortKey}
+          onSortChange={setSortKey}
+          counts={statusCounts}
+          showReorderHint={!viewIsDefault}
+        />
+      )}
+
       {loading && visibleServers.length === 0 ? (
         <div className="flex items-center justify-center h-64 text-gray-500">
           <Loader2 size={32} className="animate-spin mr-3" />
@@ -1398,6 +1452,20 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
         <div className="flex flex-col items-center justify-center h-64 text-gray-500">
           <p className="text-lg mb-2">No servers yet</p>
           <p className="text-sm">Click "Create Server" or "Import Server" to get started.</p>
+        </div>
+      ) : shownServers.length === 0 ? (
+        <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+          <Search size={32} className="mb-3 text-gray-500" aria-hidden />
+          <p className="text-lg mb-1">
+            {searchQuery.trim() ? `No servers match "${searchQuery.trim()}"` : 'No servers match this filter'}
+          </p>
+          <p className="text-sm mb-4">Try a different search or status.</p>
+          <button
+            onClick={() => { setSearchQuery(''); setStatusFilter('all'); }}
+            className="px-4 py-2 rounded border border-[#E5B80B] text-[#E5B80B] text-sm font-medium hover:bg-[#E5B80B]/10 transition-colors"
+          >
+            Clear search and filters
+          </button>
         </div>
       ) : (
         <DndContext
@@ -1410,7 +1478,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
         >
           <SortableContext items={visibleServerIds} strategy={rectSortingStrategy}>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {visibleServers.map((server) => (
+              {shownServers.map((server) => (
                 <SortableServerCard
                   key={server.id}
                   id={server.id}
@@ -1431,144 +1499,8 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
                   onDoubleClick={() => handleOpenServer(server.id)}
                   onContextMenu={(e) => handleServerContextMenu(e, server)}
                 >
-              <div className="flex justify-between items-start mb-4">
-                <div>
-                  {renamingId === server.id ? (
-                    <input
-                      ref={renameInputRef}
-                      value={renameValue}
-                      onChange={(e) => setRenameValue(e.target.value)}
-                      onKeyDown={handleRenameKeyDown}
-                      onBlur={handleRenameSubmit}
-                      onClick={(e) => e.stopPropagation()}
-                      onDoubleClick={(e) => e.stopPropagation()}
-                      className="text-xl font-bold text-white mb-1 bg-transparent border-b border-[#E5B80B] outline-none w-full"
-                    />
-                  ) : (
-                    <h3
-                      className={clsx(
-                        "text-xl font-bold text-white mb-1 group-hover:text-[#E5B80B] transition-colors",
-                        selectedServerIds.has(server.id) && "cursor-text hover:border-b hover:border-dashed hover:border-[#E5B80B]/50"
-                      )}
-                      onClick={(e) => handleStartRename(e, server)}
-                    >
-                      {server.name}
-                    </h3>
-                  )}
-                  <div className="flex items-center gap-2 text-sm text-gray-400">
-                    <span className="bg-[#3a3a3a] px-2 py-0.5 rounded text-xs">{server.type}</span>
-                    <span>{server.version}</span>
-                  </div>
-                </div>
-                <div className={`
-                  flex items-center gap-1 px-2 py-1 rounded text-xs font-bold uppercase
-                  ${server.status === 'Running' ? 'bg-green-900/30 text-green-400' :
-                    server.status === 'Crashed' || server.status === 'Error' ? 'bg-red-900/30 text-red-400' :
-                    server.status === 'Booting' ? 'bg-yellow-900/30 text-yellow-400' :
-                    server.status === 'Installing' ? 'bg-blue-900/30 text-blue-400' :
-                    'bg-gray-700/30 text-gray-400'}
-                `}>
-                  {server.status === 'Running' && <Play size={10} fill="currentColor" />}
-                  {server.status === 'Stopped' && <Square size={10} fill="currentColor" />}
-                  {server.status === 'Crashed' && <AlertTriangle size={10} />}
-                  {server.status === 'Error' && <AlertTriangle size={10} />}
-                  {server.status === 'Booting' && <Loader2 size={10} className="animate-spin" />}
-                  {server.status === 'Installing' && <Loader2 size={10} className="animate-spin" />}
-                  {server.status}
-                </div>
-              </div>
+              {renderServerCardContent(server, true)}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6">
-                <div className="bg-[#1a1a1a] p-3 rounded border border-[#333]">
-                  <div className="flex items-center gap-2 text-gray-400 text-xs mb-1">
-                    <Cpu size={14} /> CPU
-                  </div>
-                  <div className="text-lg font-mono text-white">{server.status === 'Running' ? `${Math.round(server.cpu)}%` : '-'}</div>
-                </div>
-                <div className="bg-[#1a1a1a] p-3 rounded border border-[#333]">
-                  <div className="flex items-center gap-2 text-gray-400 text-xs mb-1">
-                    <HardDrive size={14} /> RAM
-                  </div>
-                  <div className="text-lg font-mono text-white">{server.status === 'Running' ? `${Math.round(server.ram)}%` : '-'}</div>
-                </div>
-              </div>
-
-              {server.status === 'Error' && server.installError && (
-                <div className="mt-3 text-xs text-red-400 bg-red-900/10 border border-red-900/30 rounded p-2 truncate" title={server.installError}>
-                  {server.installError}
-                </div>
-              )}
-
-              <div className="mt-4 pt-4 border-t border-[#333] flex items-center justify-between">
-                 <div className="flex items-center gap-3">
-                   <button
-                    onClick={(e) => handleToggleAutoStart(e, server.id, server.autoStart)}
-                    className="flex items-center gap-1.5 group/auto"
-                    title={server.autoStart ? 'Auto-start enabled' : 'Auto-start disabled'}
-                   >
-                     <div className={clsx(
-                       "relative w-8 h-4 rounded-full transition-colors",
-                       server.autoStart ? "bg-[#E5B80B]" : "bg-[#3a3a3a]"
-                     )}>
-                       <div className={clsx(
-                         "absolute top-0.5 w-3 h-3 rounded-full transition-all",
-                         server.autoStart ? "left-4.5 bg-black" : "left-0.5 bg-gray-500"
-                       )} />
-                     </div>
-                     <span className={clsx(
-                       "text-[10px] font-medium transition-colors",
-                       server.autoStart ? "text-[#E5B80B]" : "text-gray-500 group-hover/auto:text-gray-400"
-                     )}>
-                       Auto Start
-                     </span>
-                   </button>
-
-                   <button
-                    onClick={(e) => handleOpenFlagsPopup(e, server)}
-                    className="flex items-center gap-1 text-[10px] font-medium text-gray-500 hover:text-[#E5B80B] transition-colors"
-                    title="Change JVM Flags"
-                   >
-                     <Settings2 size={12} />
-                     <span>JVM Flags</span>
-                   </button>
-                   {serverHasNewerVersion(server) && (
-                     <button
-                      onClick={(e) => handleOpenVersionPopup(e, server)}
-                      className="flex items-center gap-1 text-[10px] font-medium text-gray-500 hover:text-[#E5B80B] transition-colors"
-                      title="Update server version"
-                     >
-                       <RotateCw size={12} />
-                       <span>Update version</span>
-                     </button>
-                   )}
-                 </div>
-
-                 <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (server.status === 'Error') {
-                      apiRequest<void>(`/api/servers/${server.id}/retry-install`, { method: 'POST' }, 'Couldn’t retry installation. Try again.')
-                        .then(() => { toast.success('Retrying installation...'); refreshServers(); })
-                        .catch(() => toast.error('Couldn’t retry installation. Try again.'));
-                    } else {
-                      handleToggleStatus(e, server.id, server.status);
-                    }
-                  }}
-                  disabled={server.status === 'Booting' || server.status === 'Installing'}
-                  className={clsx(
-                    "text-xs px-3 py-1.5 rounded font-medium border transition-colors",
-                    (server.status === 'Booting' || server.status === 'Installing') && "opacity-50 cursor-not-allowed border-blue-500 text-blue-400",
-                    server.status === 'Running' && "border-red-500 text-red-400 hover:bg-red-900/20",
-                    server.status === 'Error' && "border-orange-500 text-orange-400 hover:bg-orange-900/20",
-                    (server.status === 'Stopped' || server.status === 'Crashed') && "border-green-500 text-green-400 hover:bg-green-900/20",
-                  )}
-                 >
-                   {server.status === 'Running' ? 'Stop' :
-                    server.status === 'Booting' ? 'Booting...' :
-                    server.status === 'Installing' ? 'Installing...' :
-                    server.status === 'Error' ? 'Retry' : 'Start'}
-                 </button>
-              </div>
 
               {/* JVM Flags Popup */}
               {flagsPopup?.serverId === server.id && (
@@ -1653,54 +1585,88 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
               {/* Version Update Popup */}
               {updatePopup?.serverId === server.id && (
                 <div
-                  className="absolute inset-0 z-10 bg-[#202020]/95 backdrop-blur-sm rounded-lg p-5 flex flex-col"
+                  className="absolute inset-0 z-10 bg-[#202020]/95 backdrop-blur-sm rounded-lg p-4 flex flex-col overflow-y-auto"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <div className="flex items-center justify-between mb-4">
-                    <h4 className="text-sm font-bold text-white">Update version</h4>
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-sm font-bold text-white">Manage version</h4>
                     <button onClick={() => setUpdatePopup(null)} className="text-gray-500 hover:text-white transition-colors">
                       <X size={16} />
                     </button>
                   </div>
 
-                  <div className="text-xs text-gray-400 mb-3">
+                  <div className="text-xs text-gray-400 mb-2">
                     <div>Current version: <span className="text-white">{updatePopup.currentVersion}</span></div>
-                    <div className="mt-1">Choose a newer version for <span className="text-white">{updatePopup.serverName}</span>.</div>
+                    <div className="mt-0.5">Newer versions update the server, older ones downgrade it.</div>
                   </div>
 
-                  <label className="block text-xs text-gray-500 mb-2">Available versions</label>
-                  <div className="relative">
-                    <select
-                      value={updatePopup.selectedVersion}
-                      onChange={(e) => setUpdatePopup({ ...updatePopup, selectedVersion: e.target.value })}
-                      className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-3 text-white appearance-none cursor-pointer focus:outline-none focus:border-[#E5B80B]"
-                      disabled={updatingVersion}
-                    >
-                      {updatePopup.options.map((v) => (
-                        <option key={v.version} value={v.version}>
-                          {v.version}{v.latest ? ' (Latest)' : ''}
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" size={16} />
-                  </div>
+                  {(() => {
+                    const newer = updatePopup.options.filter((v) => compareVersionStrings(v.version, updatePopup.currentVersion) > 0);
+                    const older = updatePopup.options.filter((v) => compareVersionStrings(v.version, updatePopup.currentVersion) <= 0);
+                    const isDowngrade = compareVersionStrings(updatePopup.selectedVersion, updatePopup.currentVersion) < 0;
+                    const needsAck = isDowngrade && updatePopup.hasWorlds;
+                    const renderOptions = (list: VersionInfo[]) => list.map((v) => (
+                      <option key={v.version} value={v.version}>
+                        {v.version}{v.latest ? ' (Latest)' : ''}
+                      </option>
+                    ));
+                    return (
+                      <>
+                        <label htmlFor="manage-version-select" className="block text-xs text-gray-500 mb-2">Available versions</label>
+                        <div className="relative">
+                          <select
+                            id="manage-version-select"
+                            value={updatePopup.selectedVersion}
+                            onChange={(e) => { setDowngradeAck(false); setUpdatePopup({ ...updatePopup, selectedVersion: e.target.value }); }}
+                            className="w-full bg-[#1a1a1a] border border-[#3a3a3a] rounded p-2.5 text-white appearance-none cursor-pointer focus:outline-none focus:border-[#E5B80B]"
+                            disabled={updatingVersion}
+                          >
+                            {newer.length > 0 && <optgroup label="Newer versions (update)">{renderOptions(newer)}</optgroup>}
+                            {older.length > 0 && <optgroup label="Older versions (downgrade)">{renderOptions(older)}</optgroup>}
+                          </select>
+                          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" size={16} />
+                        </div>
+                        <JavaRuntimeHint type={server.type} version={updatePopup.selectedVersion} />
 
-                  <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-[#333]">
-                    <button
-                      onClick={() => setUpdatePopup(null)}
-                      className="text-xs px-3 py-1.5 rounded text-gray-400 hover:text-white hover:bg-[#3a3a3a] transition-colors"
-                      disabled={updatingVersion}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={handleApplyVersionUpdate}
-                      className="text-xs px-3 py-1.5 rounded font-medium bg-[#E5B80B] text-black hover:bg-[#d4a90a] transition-colors disabled:opacity-50"
-                      disabled={updatingVersion}
-                    >
-                      {updatingVersion ? 'Updating...' : 'Accept'}
-                    </button>
-                  </div>
+                        {needsAck && (
+                          <div role="alert" className="mt-2 mb-2 rounded border border-red-900/50 bg-red-900/15 p-2.5 text-xs text-red-300">
+                            <div className="flex items-start gap-2">
+                              <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden />
+                              <p>Downgrading can break your world. A world saved on a newer version may not load, or may be damaged. Make a backup first.</p>
+                            </div>
+                            <label className="mt-2 flex cursor-pointer select-none items-center gap-2 text-red-200">
+                              <Checkbox
+                                checked={downgradeAck}
+                                onCheckedChange={(checked) => setDowngradeAck(checked === true)}
+                                disabled={updatingVersion}
+                              />
+                              I understand the risk
+                            </label>
+                          </div>
+                        )}
+
+                        <div className="flex justify-end gap-2 mt-auto pt-3 border-t border-[#333]">
+                          <button
+                            onClick={() => setUpdatePopup(null)}
+                            className="text-xs px-3 py-1.5 rounded text-gray-400 hover:text-white hover:bg-[#3a3a3a] transition-colors"
+                            disabled={updatingVersion}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={handleApplyVersionUpdate}
+                            className={clsx(
+                              'text-xs px-3 py-1.5 rounded font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+                              needsAck ? 'bg-red-700 text-white hover:bg-red-600' : 'bg-[#E5B80B] text-black hover:bg-[#d4a90a]'
+                            )}
+                            disabled={updatingVersion || (needsAck && !downgradeAck)}
+                          >
+                            {updatingVersion ? 'Working...' : isDowngrade ? 'Downgrade' : 'Update'}
+                          </button>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               )}
                 </SortableServerCard>
@@ -1917,6 +1883,7 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
                             ))}
                           </select>
                         )}
+                        <JavaRuntimeHint type={importForm.serverType} version={importAnalysis.version?.trim() || importForm.version} />
                       </motion.div>
                       <motion.div variants={importInfoItemVariants} className="bg-[#1a1a1a] border border-[#333] rounded p-3 md:col-span-2">
                         <div className="text-gray-500 text-xs mb-1">Worlds</div>
@@ -2057,16 +2024,15 @@ export const ServersPage = ({ onViewChange }: ServersPageProps) => {
                 </div>
               )}
 
-              {serverHasNewerVersion(contextMenuServer) && (
-                <button
-                  type="button"
-                  className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-[#e6e6e6] hover:bg-[#2b2b2b]"
-                  onClick={() => { void openVersionPopup(contextMenuServer); }}
-                >
-                  <RotateCw size={14} className="text-[#E5B80B]" />
-                  Update version
-                </button>
-              )}
+              <button
+                type="button"
+                className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-[#e6e6e6] hover:bg-[#2b2b2b]"
+                onClick={() => { void openVersionPopup(contextMenuServer); }}
+              >
+                <ArrowUpDown size={14} className="text-[#E5B80B]" />
+                Manage version
+                {serverHasNewerVersion(contextMenuServer) && <span className="ml-auto text-[10px] text-[#E5B80B]">Update available</span>}
+              </button>
 
               <button
                 type="button"
