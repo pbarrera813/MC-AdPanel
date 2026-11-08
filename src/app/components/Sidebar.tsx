@@ -89,7 +89,7 @@ export const Sidebar = ({ currentView, setCurrentView, className }: SidebarProps
       </div>
 
       <div className="p-4 border-t border-[#3a3a3a] text-xs text-center text-gray-600">
-        v1.0.1 &copy; Pbarrera813 2026
+        v1.1.0 &copy; Pbarrera813 2026
       </div>
     </div>
   );

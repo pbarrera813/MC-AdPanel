@@ -1,7 +1,7 @@
-﻿<h1><img src="public/icon.png" alt="Orexa Panel icon" width="34" /> Orexa Panel v1.0.1</h1>
+﻿<h1><img src="public/icon.png" alt="Orexa Panel icon" width="34" /> Orexa Panel v1.1.0</h1>
 
-Orexa Panel is a self-hosted Minecraft server panel built around the simple idea: plug and play
-Just download it, open it, and start creating and managing servers from one place, without putting any feature behind a paywall or tier, just download, run the docker command and start going crazy.
+Orexa Panel is a self-hosted Minecraft server panel built around one simple idea: plug and play
+Just download it, open it, and start creating and managing servers from one place, without putting features behind a lot of diferent options or bloating you with unnecessary options, just download, run the docker command and start going crazy.
 
 ![Go](https://img.shields.io/badge/Go-1.22-00ADD8?logo=go&logoColor=white)
 ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
@@ -9,12 +9,57 @@ Just download it, open it, and start creating and managing servers from one plac
 
 ## What Orexa Is
 
-Orexa is designed for day-to-day Minecraft administration with a simple workflow:
+Orexa is designed for ease of use Minecraft administration with a simple workflow:
 
 - Create and run multiple servers from the browser.
 - Manage files, plugins/mods, logs, backups, and players without extra tools.
 - Use safe defaults out of the box, with optional advanced tuning when needed.
 - Keep core server management features open and accessible, with no paid feature gates.
+
+## What's New in 1.1.0
+
+### Java selection
+
+Orexa chooses the Java runtime for each server: Java 25 for 26.x, Java 21 from Minecraft 1.20.5 onward, and Java 17 before that. When you create, update or import a server, the version picker shows which Java the selected version will run on, and warns you if that Java is not available in your install.
+
+### Clearer errors
+
+Failed installs and crashes now show a short title and a suggested fix on the server card, such as "Port 25565 is already in use" or "The server ran out of memory". The original error text is still available through the "Show details" button.
+
+### Restart on crash
+
+Each server card has a "Restart on crash" switch, off by default. When it is on, a crashed server is started again after a few seconds. After 3 crashes within 10 minutes Orexa stops retrying and shows a notice for you to review. Stopping or killing a server from the panel is never counted as a crash.
+
+### Server list
+
+With more than one server, the list gets a search box, a status filter (All, Running, Stopped, Problems) and a sort menu. Cards show the number of online players and the uptime. Drag-to-reorder works in the default view and is paused while a search or filter is active.
+
+### Manage version
+
+"Update version" is now "Manage version", and it lets you move a server to an older version as well as a newer one. Downgrading a regular server shows a warning that worlds saved on a newer version may not load on an older one, and you have to tick "I understand the risk" before it proceeds. Proxies have no world, so they skip the warning.
+
+### Server jar detection
+
+Upload a server `.jar` to the server folder under any name and Orexa will use it. The version on the card is read from the jar, and the Java runtime is chosen for that version. If the configured jar is deleted, Orexa falls back to the newest `.jar` in that server root folder.
+
+### Velocity
+
+Velocity is now correctly detected. A proxy's bind port and shown max players are read from `velocity.toml`. Changing them in the File Browser updates the card and the settings right away. A new proxy created on a custom port gets that port in its first `velocity.toml`.
+
+### File editor
+
+`Ctrl+S` saves without closing the editor, and closing it with unsaved changes asks for confirmation. Orexa keeps the previous five versions of each edited file, and the "Versions" menu loads one back into the editor.
+
+### Console
+
+The up and down arrow keys step through previously entered commands. History is stored per server.
+
+### Other changes
+
+- All pop-ups close with `Esc` for a better UX.
+- The upload window highlights its drop area while you drag files over it.
+- CPU and RAM usage are read directly from `/proc`, so the system-monitoring library is no longer a dependency.
+- Unused code and old migration paths were removed.
 
 ## Quick Start
 
@@ -46,7 +91,7 @@ Requirements:
 - Linux
 - Go 1.22+
 - Node.js 20+
-- Docker image includes bundled JDK runtimes (17/21/25) with automatic selection per server type/version to avoid problems when creating servers.
+- Docker image includes bundled JDK runtimes (17/21/25) with automatic selection per server type/version (Java 25 for Minecraft 26.x, Java 21 from 1.20.5, Java 17 before that) to avoid problems when creating servers.
 
 Build frontend:
 
@@ -72,14 +117,21 @@ go build -o orexa-panel .
 - Clone servers with per-section options (worlds, plugins/mods, configs).
 - Scheduled restart and scheduled stop.
 - Auto-start toggle and retry install support.
-- Velocity-aware settings compatible too.
+- Optional "Restart on crash" per server (off by default, gives up after 3 crashes in 10 minutes).
+- Manage version: update a server to a newer version or downgrade to an older one, with a world-safety warning on downgrade.
+- Pre-flight Java check shown next to the version picker when creating, updating, or importing.
+- Plain-language explanations for failed installs and crashes, with technical details one click away.
+- Follows the server jar in the folder: upload a jar under any name and the version and Java follow it.
+- Velocity-aware settings: bind port and shown max players stay in sync with `velocity.toml`.
+- Search, status filter, and sort for the server list, plus live players and uptime on each card.
 - Persistent custom server card ordering.
 - Desktop right-click context menu for quick server actions.
 - Mobile long-press drag reorder for server cards.
 
 ### Monitoring and Console
 
-- Live console stream over WebSocket.
+- Live console stream over WebSocket, which reconnects cleanly when you switch between servers.
+- Command history with the up and down arrow keys, remembered per server.
 - Console clears on new start after a prior stop, so each new run begins cleanly.
 - Live server metrics with corrected host-share CPU and RAM percentages.
 - System-wide usage endpoint and UI panel for panel + running managed servers.
@@ -93,6 +145,8 @@ go build -o orexa-panel .
 ### File Browser
 
 - Folder browsing, search, upload, rename, edit, download, and delete.
+- Editor safety: `Ctrl+S` saves without closing, unsaved changes are never discarded silently, and the last five saved versions of a file can be restored from the Versions menu.
+- Uploading a `.jar` to the server root makes it the server jar; the card version updates to match.
 - Route resets to server root when switching between servers.
 - Rename input preselects file name portion before extension.
 - Extension-change warning during rename to prevent accidental breakage.
@@ -139,13 +193,11 @@ Orexa works with defaults. If you need extra control, use environment variables:
 | `ADPANEL_PLUGIN_UPDATE_ALLOWED_HOSTS` | unset | Extra allowed hosts/domains for plugin/mod update downloads. |
 | `ADPANEL_MAX_PLUGIN_UPDATE_BYTES` | `268435456` | Max download size for plugin/mod update fetches (256 MB). |
 | `ADPANEL_USER_AGENT` | unset | Optional global User-Agent override for upstream fetches. |
-| `ADPANEL_DEBUG_PLUGIN_UPDATES` | `0` | Set to `1` for verbose plugin/mod update diagnostics. |
 | `ADPANEL_AUTO_FIX_HOSTS` | enabled | Set to `false` to disable startup hostname `/etc/hosts` auto-fix attempts on Linux. |
 
 ## Security Posture (Current)
 
 - Passwords are stored hashed with Argon2id.
-- Legacy SHA-256 hashes are verified for backward compatibility and transparently upgraded on successful login.
 - Default credentials are detected and gated: session is marked `mustChangePassword`.
 - Unsafe API calls are blocked until password change when the default credential state is active.
 - CSRF protection validates same-origin requests for unsafe authenticated API methods.
@@ -213,6 +265,7 @@ Auth gate and security error codes used by protected routes include:
 | `PUT` | `/api/servers/{id}/version` |
 | `PUT` | `/api/servers/{id}/settings` |
 | `PUT` | `/api/servers/{id}/auto-start` |
+| `PUT` | `/api/servers/{id}/restart-on-crash` |
 | `PUT` | `/api/servers/{id}/flags` |
 | `GET` | `/api/servers/{id}/status` |
 | `PUT` | `/api/servers/order` |
@@ -226,6 +279,9 @@ Auth gate and security error codes used by protected routes include:
 | Method | Endpoint |
 |---|---|
 | `GET` | `/api/versions/{type}` |
+| `GET` | `/api/versions/{type}/{version}/java` |
+
+The second endpoint is the Java pre-flight check: it reports which Java a version needs and whether this install has it.
 
 ### Files
 
@@ -235,6 +291,8 @@ Auth gate and security error codes used by protected routes include:
 | `GET` | `/api/servers/{id}/files/exists?path=` |
 | `GET` | `/api/servers/{id}/files/content?path=` |
 | `PUT` | `/api/servers/{id}/files/content` |
+| `GET` | `/api/servers/{id}/files/versions?path=` |
+| `GET` | `/api/servers/{id}/files/versions/content?path=&id=` |
 | `POST` | `/api/servers/{id}/files/upload` |
 | `DELETE` | `/api/servers/{id}/files?path=` |
 | `POST` | `/api/servers/{id}/files/mkdir` |
@@ -297,6 +355,7 @@ Default runtime paths under `ADPANEL_DIR` (default `/AdPanel`):
 |-- data/
 |   |-- servers.json
 |   |-- settings.json
+|   |-- file-versions/        (previous versions of edited files, 5 per file)
 |   `-- extension-sources/
 |-- Servers/
 `-- Backups/
