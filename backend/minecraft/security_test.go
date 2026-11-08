@@ -2,6 +2,7 @@ package minecraft
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,40 +68,6 @@ func TestSafePathBlocksSymlinkEscape(t *testing.T) {
 	}
 }
 
-func TestValidateLoginUpgradesLegacyHash(t *testing.T) {
-	base := t.TempDir()
-	mgr, err := NewManager(base)
-	if err != nil {
-		t.Fatalf("NewManager failed: %v", err)
-	}
-	defer mgr.StopAll()
-
-	legacyHash, err := hashPasswordLegacySHA256(defaultLoginPassword())
-	if err != nil {
-		t.Fatalf("failed to create legacy hash: %v", err)
-	}
-
-	mgr.settingsMu.Lock()
-	mgr.settings.LoginUser = defaultLoginUser()
-	mgr.settings.LoginPasswordHash = legacyHash
-	if err := mgr.persistSettings(); err != nil {
-		mgr.settingsMu.Unlock()
-		t.Fatalf("persistSettings failed: %v", err)
-	}
-	mgr.settingsMu.Unlock()
-
-	if !mgr.ValidateLogin(defaultLoginUser(), defaultLoginPassword()) {
-		t.Fatalf("expected legacy credentials to validate")
-	}
-
-	mgr.settingsMu.RLock()
-	upgraded := mgr.settings.LoginPasswordHash
-	mgr.settingsMu.RUnlock()
-	if !strings.HasPrefix(upgraded, passwordHashSchemeArgon2id+"$") {
-		t.Fatalf("expected hash to upgrade to argon2id, got %q", upgraded)
-	}
-}
-
 func TestUpdateAppSettingsEnforcesPasswordLength(t *testing.T) {
 	base := t.TempDir()
 	mgr, err := NewManager(base)
@@ -163,62 +130,11 @@ func TestQuarantineUnsafeServerConfigPath(t *testing.T) {
 	}
 	defer mgr.StopAll()
 
-	if err := mgr.EnsureServerOperational("unsafe001"); err == nil {
-		t.Fatalf("expected unsafe server path to be quarantined")
-	} else if !IsConfigPathSafetyError(err) {
-		t.Fatalf("expected ConfigPathSafetyError, got %v", err)
-	}
-}
-
-func TestBackupMigrationUsesStableServerID(t *testing.T) {
-	base := t.TempDir()
-	serversDir := filepath.Join(base, "Servers")
-	serverRoot := filepath.Join(serversDir, "LegacySrv")
-	if err := os.MkdirAll(serverRoot, 0755); err != nil {
-		t.Fatalf("failed to create server root: %v", err)
-	}
-
-	if err := os.MkdirAll(filepath.Join(base, "data"), 0755); err != nil {
-		t.Fatalf("failed to create data dir: %v", err)
-	}
-	cfgs := []*ServerConfig{
-		{
-			ID:         "legacy01",
-			Name:       "LegacySrv",
-			Type:       "paper",
-			Version:    "1.21.1",
-			Port:       25565,
-			JarFile:    "server.jar",
-			MaxRAM:     "1G",
-			MinRAM:     "512M",
-			MaxPlayers: 20,
-			Dir:        serverRoot,
-		},
-	}
-	raw, err := json.Marshal(cfgs)
-	if err != nil {
-		t.Fatalf("failed to marshal configs: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(base, "data", "servers.json"), raw, 0644); err != nil {
-		t.Fatalf("failed to write servers.json: %v", err)
-	}
-
-	oldBackupDir := filepath.Join(base, "Backups", sanitizeName("LegacySrv"))
-	if err := os.MkdirAll(oldBackupDir, 0755); err != nil {
-		t.Fatalf("failed to create legacy backup dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(oldBackupDir, "backup_old.tar.gz"), []byte("legacy"), 0644); err != nil {
-		t.Fatalf("failed to write backup: %v", err)
-	}
-
-	mgr, err := NewManager(base)
-	if err != nil {
-		t.Fatalf("NewManager failed: %v", err)
-	}
-	defer mgr.StopAll()
-
-	newBackupPath := filepath.Join(base, "Backups", sanitizeName("legacy01"), "backup_old.tar.gz")
-	if _, err := os.Stat(newBackupPath); err != nil {
-		t.Fatalf("expected backup to be migrated to stable server-id directory: %v", err)
+	mgr.mu.RLock()
+	_, err = mgr.serverConfigForOperationLocked("unsafe001")
+	mgr.mu.RUnlock()
+	var pathErr *ConfigPathSafetyError
+	if !errors.As(err, &pathErr) {
+		t.Fatalf("expected unsafe server path to be quarantined with ConfigPathSafetyError, got %v", err)
 	}
 }

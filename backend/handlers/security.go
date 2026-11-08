@@ -93,20 +93,6 @@ func remoteAddrIP(remoteAddr string) net.IP {
 	return net.ParseIP(strings.TrimSpace(host))
 }
 
-func firstForwardedForIP(xffHeader string) string {
-	for _, part := range strings.Split(xffHeader, ",") {
-		candidate := strings.TrimSpace(part)
-		if candidate == "" {
-			continue
-		}
-		candidate = strings.Trim(candidate, "[]")
-		if ip := net.ParseIP(candidate); ip != nil {
-			return ip.String()
-		}
-	}
-	return ""
-}
-
 func parseForwardedForIPs(xffHeader string) []net.IP {
 	parts := strings.Split(xffHeader, ",")
 	out := make([]net.IP, 0, len(parts))
@@ -201,17 +187,6 @@ func isLocalDevOrigin(raw string) bool {
 	}
 	host := strings.ToLower(strings.TrimSpace(u.Hostname()))
 	return host == "localhost" || host == "127.0.0.1" || host == "::1"
-}
-
-func isAllowedWebSocketOrigin(origin string, allowed map[string]struct{}) bool {
-	normalized := normalizeOrigin(origin)
-	if normalized == "" {
-		return false
-	}
-	if _, ok := allowed[normalized]; ok {
-		return true
-	}
-	return isLocalDevOrigin(normalized)
 }
 
 func requestScheme(r *http.Request, trusted *trustedProxySet) string {

@@ -56,13 +56,6 @@ func TestTrustedProxySet(t *testing.T) {
 	}
 }
 
-func TestForwardedForParsing(t *testing.T) {
-	got := firstForwardedForIP("203.0.113.10, 10.0.0.2")
-	if got != "203.0.113.10" {
-		t.Fatalf("unexpected first forwarded IP: %q", got)
-	}
-}
-
 func TestRealClientIPFromXFFUsesRightToLeftTrust(t *testing.T) {
 	trusted := parseTrustedProxySet("10.0.0.0/8")
 	got := realClientIPFromXFF("10.2.0.5:443", "9.9.9.9, 198.51.100.40", trusted)
@@ -75,13 +68,14 @@ func TestWebSocketOriginPolicy(t *testing.T) {
 	allowed := map[string]struct{}{
 		normalizeOrigin("https://panel.example.com"): {},
 	}
-	if !isAllowedWebSocketOrigin("https://panel.example.com", allowed) {
+	req := httptest.NewRequest("GET", "http://panel.internal/api/logs/server-1", nil)
+	if !isAllowedWebSocketOriginForRequest(req, "https://panel.example.com", allowed, nil) {
 		t.Fatalf("expected allowlisted origin to pass")
 	}
-	if !isAllowedWebSocketOrigin("http://localhost:5173", allowed) {
+	if !isAllowedWebSocketOriginForRequest(req, "http://localhost:5173", allowed, nil) {
 		t.Fatalf("expected localhost dev origin fallback to pass")
 	}
-	if isAllowedWebSocketOrigin("https://evil.example.com", allowed) {
+	if isAllowedWebSocketOriginForRequest(req, "https://evil.example.com", allowed, nil) {
 		t.Fatalf("expected unlisted origin to be rejected")
 	}
 }

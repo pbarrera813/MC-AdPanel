@@ -266,8 +266,7 @@ func (p *PaperMCProvider) FetchVersions(ctx context.Context) ([]VersionInfo, err
 	return versions, nil
 }
 
-func (p *PaperMCProvider) DownloadJar(ctx context.Context, version string, destDir string, javaExec string, progressFn func(string)) error {
-	_ = javaExec
+func (p *PaperMCProvider) DownloadJar(ctx context.Context, version string, destDir string, _ string, progressFn func(string)) error {
 	resolved, err := resolveLatest(ctx, p, version)
 	if err != nil {
 		return err
@@ -353,8 +352,7 @@ func (p *PurpurProvider) FetchVersions(ctx context.Context) ([]VersionInfo, erro
 	return versions, nil
 }
 
-func (p *PurpurProvider) DownloadJar(ctx context.Context, version string, destDir string, javaExec string, progressFn func(string)) error {
-	_ = javaExec
+func (p *PurpurProvider) DownloadJar(ctx context.Context, version string, destDir string, _ string, progressFn func(string)) error {
 	resolved, err := resolveLatest(ctx, p, version)
 	if err != nil {
 		return err
@@ -410,8 +408,7 @@ func (p *FabricProvider) FetchVersions(ctx context.Context) ([]VersionInfo, erro
 	return versions, nil
 }
 
-func (p *FabricProvider) DownloadJar(ctx context.Context, version string, destDir string, javaExec string, progressFn func(string)) error {
-	_ = javaExec
+func (p *FabricProvider) DownloadJar(ctx context.Context, version string, destDir string, _ string, progressFn func(string)) error {
 	resolved, err := resolveLatest(ctx, p, version)
 	if err != nil {
 		return err
@@ -918,8 +915,7 @@ func (p *VanillaProvider) FetchVersions(ctx context.Context) ([]VersionInfo, err
 	return versions, nil
 }
 
-func (p *VanillaProvider) DownloadJar(ctx context.Context, version string, destDir string, javaExec string, progressFn func(string)) error {
-	_ = javaExec
+func (p *VanillaProvider) DownloadJar(ctx context.Context, version string, destDir string, _ string, progressFn func(string)) error {
 	resolved, err := resolveLatest(ctx, p, version)
 	if err != nil {
 		return err

@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -38,7 +37,6 @@ func main() {
 
 	log.Printf("Base directory: %s", baseDir)
 	log.Printf("Static files: %s", distDir)
-	logFrontendBundleFingerprint(distDir)
 	log.Printf("Running startup self-checks...")
 	if err := runStartupChecks(baseDir, distDir); err != nil {
 		log.Fatalf("Startup self-check failed: %v", err)
@@ -64,7 +62,7 @@ func main() {
 	versionHandler := handlers.NewVersionHandler(mgr)
 	settingsHandler := handlers.NewSettingsHandler(mgr)
 	systemUsageHandler := handlers.NewSystemUsageHandler(mgr)
-	authHandler := handlers.NewAuthHandler(mgr, baseDir)
+	authHandler := handlers.NewAuthHandler(mgr)
 
 	// Set up router using Go 1.22+ ServeMux
 	mux := http.NewServeMux()
@@ -261,41 +259,6 @@ func parseAllowedOrigins(raw string) map[string]struct{} {
 	return out
 }
 
-func logFrontendBundleFingerprint(distDir string) {
-	assetsDir := filepath.Join(distDir, "assets")
-	entries, err := os.ReadDir(assetsDir)
-	if err != nil {
-		log.Printf("Frontend bundle: unavailable (%v)", err)
-		return
-	}
-
-	var newestName string
-	var newestModTime time.Time
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasPrefix(name, "index-") || !strings.HasSuffix(name, ".js") {
-			continue
-		}
-		info, infoErr := entry.Info()
-		if infoErr != nil {
-			continue
-		}
-		if newestName == "" || info.ModTime().After(newestModTime) {
-			newestName = name
-			newestModTime = info.ModTime()
-		}
-	}
-
-	if newestName == "" {
-		log.Printf("Frontend bundle: no index-*.js file found in %s", assetsDir)
-		return
-	}
-	log.Printf("Frontend bundle: %s", newestName)
-}
-
 func runStartupChecks(baseDir, distDir string) error {
 	requiredDirs := []struct {
 		name string
@@ -324,44 +287,8 @@ func runStartupChecks(baseDir, distDir string) error {
 		return err
 	}
 	log.Printf("Self-check ok: frontend assets detected (%s)", distIndex)
-	logJavaToolchainStatus()
 	ensureLinuxHostnameResolvable()
 	return nil
-}
-
-func logJavaToolchainStatus() {
-	javaLine, javaErr := commandFirstLine("java", "-version")
-	if javaErr != nil {
-		log.Printf("Self-check warning: Java runtime unavailable: %v", javaErr)
-	} else {
-		log.Printf("Self-check ok: java detected (%s)", javaLine)
-	}
-
-	javacLine, javacErr := commandFirstLine("javac", "-version")
-	if javacErr != nil {
-		log.Printf("Self-check warning: Java compiler unavailable: %v", javacErr)
-		return
-	}
-	log.Printf("Self-check ok: javac detected (%s)", javacLine)
-}
-
-func commandFirstLine(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		trimmed := strings.TrimSpace(string(out))
-		if trimmed == "" {
-			return "", err
-		}
-		return "", fmt.Errorf("%w (%s)", err, trimmed)
-	}
-
-	text := strings.TrimSpace(string(out))
-	if text == "" {
-		return name, nil
-	}
-	lines := strings.Split(text, "\n")
-	return strings.TrimSpace(lines[0]), nil
 }
 
 func ensureLinuxHostnameResolvable() {
@@ -447,10 +374,6 @@ func hostsFileContainsHostname(content []byte, hostname string) bool {
 }
 
 func runReadinessChecks(baseDir, distDir string, mgr *minecraft.Manager) error {
-	if mgr == nil {
-		return &checkError{message: "manager is not initialized"}
-	}
-
 	requiredDirs := []string{
 		filepath.Join(baseDir, "Servers"),
 		filepath.Join(baseDir, "data"),
@@ -476,7 +399,7 @@ func requireDirectory(path string) error {
 		return err
 	}
 	if !info.IsDir() {
-		return &checkError{message: "path is not a directory: " + path}
+		return fmt.Errorf("path is not a directory: %s", path)
 	}
 	return nil
 }
@@ -492,14 +415,6 @@ func checkDirectoryWritable(path string) error {
 		return cerr
 	}
 	return os.Remove(name)
-}
-
-type checkError struct {
-	message string
-}
-
-func (e *checkError) Error() string {
-	return e.message
 }
 
 func respondJSON(w http.ResponseWriter, status int, payload any) {

@@ -1,15 +1,84 @@
 package minecraft
 
 import (
+	"fmt"
 	"log"
 	"math"
 	"os"
+	"runtime"
+	"strconv"
+	"strings"
 	"time"
-
-	"github.com/shirou/gopsutil/v4/cpu"
-	"github.com/shirou/gopsutil/v4/mem"
-	"github.com/shirou/gopsutil/v4/process"
 )
+
+// USER_HZ: /proc reports CPU time in 1/100 s ticks on Linux.
+const procClockTicksPerSecond = 100
+
+type procSample struct {
+	ticks uint64
+	at    time.Time
+}
+
+func parseMemTotalBytes(meminfo string) uint64 {
+	for _, line := range strings.Split(meminfo, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "MemTotal:" {
+			kb, _ := strconv.ParseUint(fields[1], 10, 64)
+			return kb * 1024
+		}
+	}
+	return 0
+}
+
+// The command name (field 2) may contain spaces and parentheses, so fields are counted after the last ')'.
+func parseProcStatTicks(stat string) (uint64, bool) {
+	end := strings.LastIndex(stat, ")")
+	if end < 0 {
+		return 0, false
+	}
+	fields := strings.Fields(stat[end+1:])
+	if len(fields) < 13 {
+		return 0, false
+	}
+	utime, err1 := strconv.ParseUint(fields[11], 10, 64)
+	stime, err2 := strconv.ParseUint(fields[12], 10, 64)
+	if err1 != nil || err2 != nil {
+		return 0, false
+	}
+	return utime + stime, true
+}
+
+func parseStatmRSSBytes(statm string, pageSize int) (uint64, bool) {
+	fields := strings.Fields(statm)
+	if len(fields) < 2 {
+		return 0, false
+	}
+	pages, err := strconv.ParseUint(fields[1], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return pages * uint64(pageSize), true
+}
+
+func readProcUsage(pid int) (ticks uint64, rssBytes uint64, err error) {
+	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return 0, 0, err
+	}
+	statm, err := os.ReadFile(fmt.Sprintf("/proc/%d/statm", pid))
+	if err != nil {
+		return 0, 0, err
+	}
+	ticks, ok := parseProcStatTicks(string(stat))
+	if !ok {
+		return 0, 0, fmt.Errorf("unparseable /proc/%d/stat", pid)
+	}
+	rssBytes, ok = parseStatmRSSBytes(string(statm), os.Getpagesize())
+	if !ok {
+		return 0, 0, fmt.Errorf("unparseable /proc/%d/statm", pid)
+	}
+	return ticks, rssBytes, nil
+}
 
 func bytesToMB(value uint64) float64 {
 	return float64(value) / 1024 / 1024
@@ -44,12 +113,9 @@ func (m *Manager) hostRAMSharePercent(ramBytes uint64) float64 {
 }
 
 func (m *Manager) loadHostUsageMetadata() {
-	m.hostLogicalCPUs = 1
-	if count, err := cpu.Counts(true); err == nil && count > 0 {
-		m.hostLogicalCPUs = count
-	}
-	if vm, err := mem.VirtualMemory(); err == nil && vm != nil {
-		m.hostTotalRAMBytes = vm.Total
+	m.hostLogicalCPUs = runtime.NumCPU()
+	if data, err := os.ReadFile("/proc/meminfo"); err == nil {
+		m.hostTotalRAMBytes = parseMemTotalBytes(string(data))
 	}
 }
 
@@ -69,7 +135,7 @@ func (m *Manager) runUsageSampler() {
 	log.Printf("Usage sampler started (interval=%s, logical_cpus=%d, total_ram_bytes=%d)", sampleInterval, m.hostLogicalCPUs, m.hostTotalRAMBytes)
 
 	panelPID := os.Getpid()
-	knownProcesses := make(map[int]*process.Process)
+	previous := make(map[int]procSample)
 	ticker := time.NewTicker(sampleInterval)
 	defer ticker.Stop()
 	lastSummary := time.Time{}
@@ -78,28 +144,20 @@ func (m *Manager) runUsageSampler() {
 		if pid <= 0 {
 			return 0, 0, false
 		}
-		proc := knownProcesses[pid]
-		if proc == nil {
-			nextProc, err := process.NewProcess(int32(pid))
-			if err != nil {
-				delete(knownProcesses, pid)
-				return 0, 0, false
-			}
-			proc = nextProc
-			knownProcesses[pid] = proc
-		}
-
-		rawCPU, err := proc.Percent(0)
+		ticks, rssBytes, err := readProcUsage(pid)
 		if err != nil {
-			delete(knownProcesses, pid)
+			delete(previous, pid)
 			return 0, 0, false
 		}
-		memInfo, err := proc.MemoryInfo()
-		if err != nil || memInfo == nil {
-			delete(knownProcesses, pid)
-			return 0, 0, false
+		now := time.Now()
+		rawCPU := 0.0
+		if prev, ok := previous[pid]; ok && ticks >= prev.ticks {
+			if elapsed := now.Sub(prev.at).Seconds(); elapsed > 0 {
+				rawCPU = float64(ticks-prev.ticks) / procClockTicksPerSecond / elapsed * 100
+			}
 		}
-		return m.hostCPUSharePercent(rawCPU), memInfo.RSS, true
+		previous[pid] = procSample{ticks: ticks, at: now}
+		return m.hostCPUSharePercent(rawCPU), rssBytes, true
 	}
 
 	sampleOnce := func() {

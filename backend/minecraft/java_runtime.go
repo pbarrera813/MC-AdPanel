@@ -15,10 +15,6 @@ import (
 	"time"
 )
 
-const (
-	defaultJavaExec = "java"
-)
-
 var bundledJDKPaths = map[int]string{
 	17: "/opt/jdks/jdk17/bin/java",
 	21: "/opt/jdks/jdk21/bin/java",
@@ -26,8 +22,8 @@ var bundledJDKPaths = map[int]string{
 }
 
 var (
-	minecraftJavaVersionPattern = regexp.MustCompile(`^1\.([0-9]+)(\.[0-9]+)?$`)
-	yearMinecraftJavaVersionPattern =regexp.MustCompile(`^([0-9]{2})\.[0-9]+(\.[0-9]+)?$`)
+	minecraftJavaVersionPattern     = regexp.MustCompile(`^1\.([0-9]+)(\.[0-9]+)?$`)
+	yearMinecraftJavaVersionPattern = regexp.MustCompile(`^([0-9]{2})\.[0-9]+(\.[0-9]+)?$`)
 	velocityJavaVersionPattern      = regexp.MustCompile(`^([0-9]+)\.[0-9]+\.[0-9]+(-SNAPSHOT)?$`)
 )
 

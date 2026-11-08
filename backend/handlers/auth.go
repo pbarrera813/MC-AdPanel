@@ -42,8 +42,7 @@ type AuthHandler struct {
 	csrfMode       string
 }
 
-func NewAuthHandler(mgr *minecraft.Manager, baseDir string) *AuthHandler {
-	_ = baseDir
+func NewAuthHandler(mgr *minecraft.Manager) *AuthHandler {
 	return &AuthHandler{
 		mgr:            mgr,
 		sessions:       make(map[string]sessionRecord),
@@ -165,6 +164,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	expires := time.Now().Add(sessionTTL)
 	h.mu.Lock()
+	h.cleanupExpiredSessionsLocked()
 	h.sessions[token] = sessionRecord{
 		Username:           req.Username,
 		Expires:            expires,
@@ -289,14 +289,6 @@ func (h *AuthHandler) isCSRFIgnoredRoute(path string) bool {
 	default:
 		return false
 	}
-}
-
-func (h *AuthHandler) usernameFromRequest(r *http.Request) (string, bool) {
-	rec, ok := h.sessionFromRequest(r)
-	if !ok {
-		return "", false
-	}
-	return rec.Username, true
 }
 
 func (h *AuthHandler) sessionFromRequest(r *http.Request) (sessionRecord, bool) {

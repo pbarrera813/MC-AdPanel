@@ -18,7 +18,7 @@ func TestDefaultCredentialGateAndUnlockFlow(t *testing.T) {
 	}
 	defer mgr.StopAll()
 
-	handler := NewAuthHandler(mgr, base)
+	handler := NewAuthHandler(mgr)
 
 	loginReq := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"username":"mcpanel","password":"mcpanel"}`))
 	loginReq.Header.Set("Content-Type", "application/json")
@@ -78,7 +78,7 @@ func TestDefaultCredentialGateAndUnlockFlow(t *testing.T) {
 func TestTrustedProxyForwardedHeaderUsage(t *testing.T) {
 	t.Setenv("ADPANEL_TRUSTED_PROXIES", "127.0.0.1")
 
-	handler := NewAuthHandler(nil, "")
+	handler := NewAuthHandler(nil)
 
 	trustedReq := httptest.NewRequest(http.MethodGet, "/api/auth/session", nil)
 	trustedReq.RemoteAddr = "127.0.0.1:9000"
@@ -111,7 +111,7 @@ func TestCSRFMiddlewareRejectsCrossOriginUnsafeRequest(t *testing.T) {
 	}
 	defer mgr.StopAll()
 
-	handler := NewAuthHandler(mgr, base)
+	handler := NewAuthHandler(mgr)
 	if _, err := mgr.UpdateAppSettings("", "0.5", "1", "none", 3, 30, 15, 20, "adminuser", "strongpass123"); err != nil {
 		t.Fatalf("UpdateAppSettings failed: %v", err)
 	}

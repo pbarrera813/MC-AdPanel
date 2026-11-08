@@ -32,15 +32,6 @@ func canonicalServerType(serverType string) string {
 	}
 }
 
-func isModType(serverType string) bool {
-	switch strings.ToLower(strings.TrimSpace(serverType)) {
-	case "forge", "fabric", "neoforge":
-		return true
-	default:
-		return false
-	}
-}
-
 func stripImportArchiveExt(name string) string {
 	base := filepath.Base(strings.TrimSpace(name))
 	lower := strings.ToLower(base)

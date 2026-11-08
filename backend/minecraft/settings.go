@@ -2,12 +2,10 @@ package minecraft
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,14 +33,13 @@ var (
 )
 
 const (
-	passwordHashSchemeArgon2id  = "argon2id"
-	passwordHashSchemeLegacySHA = "sha256"
-	LoginPasswordMinLength      = 10
-	argon2MemoryKiB             = 64 * 1024
-	argon2Iterations            = 3
-	argon2Parallelism           = 2
-	argon2SaltLength            = 16
-	argon2KeyLength             = 32
+	passwordHashSchemeArgon2id = "argon2id"
+	LoginPasswordMinLength     = 10
+	argon2MemoryKiB            = 64 * 1024
+	argon2Iterations           = 3
+	argon2Parallelism          = 2
+	argon2SaltLength           = 16
+	argon2KeyLength            = 32
 )
 
 func defaultUserAgent() string {
@@ -76,35 +73,8 @@ func hashPassword(password string) (string, error) {
 	), nil
 }
 
-func hashPasswordLegacySHA256(password string) (string, error) {
-	salt := make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil {
-		return "", fmt.Errorf("failed to generate salt: %w", err)
-	}
-	sum := sha256.Sum256(append(salt, []byte(password)...))
-	saltB64 := base64.RawStdEncoding.EncodeToString(salt)
-	hashB64 := base64.RawStdEncoding.EncodeToString(sum[:])
-	return passwordHashSchemeLegacySHA + "$" + saltB64 + "$" + hashB64, nil
-}
-
-func verifyPasswordLegacySHA256(storedHash, password string) bool {
-	parts := strings.Split(storedHash, "$")
-	if len(parts) != 3 || parts[0] != passwordHashSchemeLegacySHA {
-		return false
-	}
-	salt, err := base64.RawStdEncoding.DecodeString(parts[1])
-	if err != nil {
-		return false
-	}
-	want, err := base64.RawStdEncoding.DecodeString(parts[2])
-	if err != nil {
-		return false
-	}
-	sum := sha256.Sum256(append(salt, []byte(password)...))
-	return subtle.ConstantTimeCompare(sum[:], want) == 1
-}
-
-func verifyPasswordArgon2id(storedHash, password string) bool {
+func verifyPassword(storedHash, password string) bool {
+	storedHash = strings.TrimSpace(storedHash)
 	parts := strings.Split(storedHash, "$")
 	if len(parts) != 5 || parts[0] != passwordHashSchemeArgon2id {
 		return false
@@ -147,23 +117,6 @@ func verifyPasswordArgon2id(storedHash, password string) bool {
 		uint32(len(want)),
 	)
 	return subtle.ConstantTimeCompare(got, want) == 1
-}
-
-func verifyPasswordWithUpgrade(storedHash, password string) (valid bool, needsUpgrade bool) {
-	storedHash = strings.TrimSpace(storedHash)
-	switch {
-	case strings.HasPrefix(storedHash, passwordHashSchemeArgon2id+"$"):
-		return verifyPasswordArgon2id(storedHash, password), false
-	case strings.HasPrefix(storedHash, passwordHashSchemeLegacySHA+"$"):
-		return verifyPasswordLegacySHA256(storedHash, password), true
-	default:
-		return false, false
-	}
-}
-
-func verifyPassword(storedHash, password string) bool {
-	valid, _ := verifyPasswordWithUpgrade(storedHash, password)
-	return valid
 }
 
 func setUserAgentOverride(ua string) {
@@ -452,22 +405,7 @@ func (m *Manager) ValidateLogin(username, password string) bool {
 	if trimmedUsername != m.settings.LoginUser {
 		return false
 	}
-	valid, needsUpgrade := verifyPasswordWithUpgrade(m.settings.LoginPasswordHash, password)
-	if !valid {
-		return false
-	}
-	if needsUpgrade {
-		hashed, err := hashPassword(password)
-		if err != nil {
-			log.Printf("Failed to upgrade password hash format: %v", err)
-			return true
-		}
-		m.settings.LoginPasswordHash = hashed
-		if err := m.persistSettings(); err != nil {
-			log.Printf("Failed to persist upgraded password hash: %v", err)
-		}
-	}
-	return true
+	return verifyPassword(m.settings.LoginPasswordHash, password)
 }
 
 func (m *Manager) IsUsingDefaultLogin() bool {

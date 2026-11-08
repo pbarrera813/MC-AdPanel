@@ -2,7 +2,6 @@ package minecraft
 
 import (
 	"archive/zip"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,7 +13,6 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -147,14 +145,6 @@ func normalizeExtensionMetadataToken(value string) string {
 		}
 	}
 	return b.String()
-}
-
-func extractExtensionMetadataKeyFromBytes(data []byte) string {
-	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return ""
-	}
-	return extractExtensionMetadataKeyFromZip(reader.File)
 }
 
 func extractExtensionMetadataKeyFromFile(filePath string) string {
@@ -300,11 +290,6 @@ type PluginUpdateInfo struct {
 	SourceURL     string `json:"sourceUrl,omitempty"`
 }
 
-func debugPluginUpdatesEnabled() bool {
-	v := strings.TrimSpace(strings.ToLower(os.Getenv("ADPANEL_DEBUG_PLUGIN_UPDATES")))
-	return v == "1" || v == "true" || v == "yes" || v == "on"
-}
-
 // pluginUpdateCache caches update check results
 var pluginUpdateCache = struct {
 	mu      sync.RWMutex
@@ -445,9 +430,6 @@ func checkBySourceURL(ctx context.Context, sourceURL, pluginName, currentVersion
 	}
 
 	if resourceID, ok := parseSpigotResourceIDFromURL(sourceURL); ok {
-		if debugPluginUpdatesEnabled() {
-			log.Printf("[UpdateDebug] source=spigot plugin=%q current=%q mc=%q resourceID=%d", pluginName, currentVersion, mcVersion, resourceID)
-		}
 		return checkSpigetByID(ctx, resourceID, pluginName, currentVersion, mcVersion), true
 	}
 	if projectID, ok := parseModrinthProjectFromURL(sourceURL); ok {
@@ -545,118 +527,32 @@ type parsedVersion struct {
 var versionTokenPattern = regexp.MustCompile(`(?i)v?(\d+(?:\.\d+)+)(?:-([0-9a-z\.-]+))?(?:\+([0-9a-z\.-]+))?`)
 
 func parseVersionCandidates(raw string) []parsedVersion {
-	raw = strings.TrimSpace(raw)
-	matches := versionTokenPattern.FindAllStringSubmatch(raw, -1)
-	if len(matches) == 0 {
-		return nil
-	}
-
-	out := make([]parsedVersion, 0, len(matches))
-	for _, m := range matches {
-		if len(m) < 2 {
-			continue
-		}
-		numParts := strings.Split(m[1], ".")
-		nums := make([]int, 0, len(numParts))
-		ok := true
-		for _, p := range numParts {
-			n, err := strconv.Atoi(p)
+	var out []parsedVersion
+	add := func(m []string) bool {
+		var nums []int
+		for _, part := range strings.Split(m[1], ".") {
+			n, err := strconv.Atoi(part)
 			if err != nil {
-				ok = false
-				break
+				return false
 			}
 			nums = append(nums, n)
 		}
-		if !ok {
+		out = append(out, parsedVersion{numbers: nums, preRelease: strings.ToLower(strings.TrimSpace(m[2]))})
+		return true
+	}
+
+	for _, m := range versionTokenPattern.FindAllStringSubmatch(strings.TrimSpace(raw), -1) {
+		if !add(m) {
 			continue
 		}
-		pre := ""
-		if len(m) >= 3 {
-			pre = strings.ToLower(strings.TrimSpace(m[2]))
-		}
-		out = append(out, parsedVersion{numbers: nums, preRelease: pre})
-
-		// Some projects place the real plugin/mod version in pre-release suffixes
-		// (e.g. "mc1.21.1-0.15.2"). Parse that part as additional candidates.
-		if len(m) >= 3 {
-			prePart := strings.TrimSpace(m[2])
-			if prePart != "" {
-				nestedPre := versionTokenPattern.FindAllStringSubmatch(prePart, -1)
-				for _, nm := range nestedPre {
-					if len(nm) < 2 {
-						continue
-					}
-					nparts := strings.Split(nm[1], ".")
-					nnums := make([]int, 0, len(nparts))
-					okNested := true
-					for _, p := range nparts {
-						n, err := strconv.Atoi(p)
-						if err != nil {
-							okNested = false
-							break
-						}
-						nnums = append(nnums, n)
-					}
-					if !okNested {
-						continue
-					}
-					npre := ""
-					if len(nm) >= 3 {
-						npre = strings.ToLower(strings.TrimSpace(nm[2]))
-					}
-					out = append(out, parsedVersion{numbers: nnums, preRelease: npre})
-				}
-			}
-		}
-
-		// Some projects place the actual plugin/mod version in build metadata
-		// (e.g. "mc1.21.1+0.15.2"). Parse that segment as additional candidates.
-		if len(m) >= 4 {
-			build := strings.TrimSpace(m[3])
-			if build != "" {
-				nested := versionTokenPattern.FindAllStringSubmatch(build, -1)
-				for _, nm := range nested {
-					if len(nm) < 2 {
-						continue
-					}
-					nparts := strings.Split(nm[1], ".")
-					nnums := make([]int, 0, len(nparts))
-					okNested := true
-					for _, p := range nparts {
-						n, err := strconv.Atoi(p)
-						if err != nil {
-							okNested = false
-							break
-						}
-						nnums = append(nnums, n)
-					}
-					if !okNested {
-						continue
-					}
-					npre := ""
-					if len(nm) >= 3 {
-						npre = strings.ToLower(strings.TrimSpace(nm[2]))
-					}
-					out = append(out, parsedVersion{numbers: nnums, preRelease: npre})
-				}
+		// Some projects put the real plugin/mod version in the pre-release or build suffix (e.g. "mc1.21.1-0.15.2", "mc1.21.1+0.15.2").
+		for _, suffix := range []string{m[2], m[3]} {
+			for _, nested := range versionTokenPattern.FindAllStringSubmatch(strings.TrimSpace(suffix), -1) {
+				add(nested)
 			}
 		}
 	}
 	return out
-}
-
-func parseVersionToken(raw string) (parsedVersion, bool) {
-	candidates := parseVersionCandidates(raw)
-	if len(candidates) == 0 {
-		return parsedVersion{}, false
-	}
-	best := candidates[0]
-	for i := 1; i < len(candidates); i++ {
-		if compareParsedVersions(candidates[i], best) > 0 {
-			best = candidates[i]
-		}
-	}
-	return best, true
 }
 
 func isLikelyMinecraftVersion(v parsedVersion) bool {
@@ -671,7 +567,7 @@ func isLikelyMinecraftVersion(v parsedVersion) bool {
 	return minor >= 7 && minor <= 40
 }
 
-func chooseComparisonVersion(raw, current string) (parsedVersion, bool) {
+func chooseComparisonVersion(raw string) (parsedVersion, bool) {
 	cands := parseVersionCandidates(raw)
 	if len(cands) == 0 {
 		return parsedVersion{}, false
@@ -773,63 +669,12 @@ func versionsEquivalentByCandidates(a, b string) bool {
 	return false
 }
 
-func canonicalizeCompositeVersion(raw string) string {
-	raw = strings.ToLower(strings.TrimSpace(raw))
-	if raw == "" {
-		return ""
-	}
-
-	parts := strings.Split(raw, "+")
-	tokens := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(strings.TrimPrefix(p, "v"))
-		if p == "" {
-			continue
-		}
-
-		if pv, ok := parseVersionToken(p); ok {
-			nums := make([]string, 0, len(pv.numbers))
-			for _, n := range pv.numbers {
-				nums = append(nums, strconv.Itoa(n))
-			}
-			token := strings.Join(nums, ".")
-			if pv.preRelease != "" {
-				token += "-" + pv.preRelease
-			}
-			tokens = append(tokens, token)
-			continue
-		}
-
-		var b strings.Builder
-		for _, r := range p {
-			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_' {
-				b.WriteRune(r)
-			}
-		}
-		clean := strings.Trim(b.String(), "._-")
-		if clean != "" {
-			tokens = append(tokens, clean)
-		}
-	}
-
-	if len(tokens) == 0 {
-		return ""
-	}
-	sort.Strings(tokens)
-	return strings.Join(tokens, "+")
-}
-
 func compareLatestToCurrent(current, latest string) (int, bool) {
-	cCurrent := canonicalizeCompositeVersion(current)
-	cLatest := canonicalizeCompositeVersion(latest)
-	if cCurrent != "" && cLatest != "" && cCurrent == cLatest {
-		return 0, true
-	}
 	if versionsEquivalentByCandidates(current, latest) {
 		return 0, true
 	}
-	cv, cok := chooseComparisonVersion(current, current)
-	lv, lok := chooseComparisonVersion(latest, current)
+	cv, cok := chooseComparisonVersion(current)
+	lv, lok := chooseComparisonVersion(latest)
 	if cok && lok {
 		return compareParsedVersions(lv, cv), true
 	}
@@ -1140,17 +985,11 @@ func checkSpigetByID(ctx context.Context, resourceID int, pluginName, currentVer
 			resourceLatest = latest
 		}
 	}
-	if debugPluginUpdatesEnabled() {
-		log.Printf("[UpdateDebug] spiget resource=%d plugin=%q current=%q mc=%q resourceLatest=%q", resourceID, pluginName, currentVersion, mcVersion, resourceLatest)
-	}
 
 	// Get versions
 	versionsURL := fmt.Sprintf("https://api.spiget.org/v2/resources/%d/versions?sort=-id&size=50", resourceID)
 	var versions spigetVersionResult
 	if err := fetchJSON(ctx, versionsURL, &versions); err != nil {
-		if debugPluginUpdatesEnabled() {
-			log.Printf("[UpdateDebug] spiget resource=%d versions fetch failed: %v", resourceID, err)
-		}
 		if resourceLatest == "" {
 			return nil
 		}
@@ -1173,9 +1012,6 @@ func checkSpigetByID(ctx context.Context, resourceID int, pluginName, currentVer
 	}
 
 	if len(versions) == 0 {
-		if debugPluginUpdatesEnabled() {
-			log.Printf("[UpdateDebug] spiget resource=%d versions list empty, using resourceLatest fallback", resourceID)
-		}
 		if resourceLatest == "" {
 			return nil
 		}
@@ -1201,24 +1037,11 @@ func checkSpigetByID(ctx context.Context, resourceID int, pluginName, currentVer
 	if best, ok := chooseBestSpigetVersion(versions, mcVersion); ok && len(best) > 0 {
 		selected = best[0]
 	} else if isLikelyUnstableVersionName(selected.Name) {
-		if debugPluginUpdatesEnabled() {
-			log.Printf("[UpdateDebug] spiget resource=%d selected unstable=%q -> unknown", resourceID, selected.Name)
-		}
 		return &PluginUpdateInfo{
 			Name:          pluginName,
 			Version:       currentVersion,
 			LatestVersion: selected.Name,
 			VersionStatus: "unknown",
-		}
-	}
-	if debugPluginUpdatesEnabled() {
-		log.Printf("[UpdateDebug] spiget resource=%d versions_count=%d", resourceID, len(versions))
-		limit := 12
-		if len(versions) < limit {
-			limit = len(versions)
-		}
-		for i := 0; i < limit; i++ {
-			log.Printf("[UpdateDebug] spiget resource=%d candidate[%d] name=%q tested=%v", resourceID, i, versions[i].Name, versions[i].TestedVersions)
 		}
 	}
 	selectedLatest := strings.TrimSpace(selected.Name)
@@ -1244,9 +1067,6 @@ func checkSpigetByID(ctx context.Context, resourceID int, pluginName, currentVer
 				return 0
 			}
 			if sign(cmpSelected) != sign(cmpResource) {
-				if debugPluginUpdatesEnabled() {
-					log.Printf("[UpdateDebug] spiget resource=%d conflict selectedLatest=%q cmpSelected=%d resourceLatest=%q cmpResource=%d -> unknown", resourceID, selectedLatest, cmpSelected, resourceLatest, cmpResource)
-				}
 				info.VersionStatus = "unknown"
 				return info
 			}
@@ -1266,10 +1086,6 @@ func checkSpigetByID(ctx context.Context, resourceID int, pluginName, currentVer
 		info.VersionStatus = "latest"
 	} else {
 		info.VersionStatus = "unknown"
-	}
-	if debugPluginUpdatesEnabled() {
-		cmp, confident := compareLatestToCurrent(currentVersion, info.LatestVersion)
-		log.Printf("[UpdateDebug] spiget resource=%d current=%q selected=%q chosen=%q status=%s cmp=%d confident=%t updateURL=%q", resourceID, currentVersion, selectedLatest, info.LatestVersion, info.VersionStatus, cmp, confident, info.UpdateURL)
 	}
 
 	return info
