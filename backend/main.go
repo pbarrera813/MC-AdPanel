@@ -107,6 +107,7 @@ func main() {
 	mux.HandleFunc("PUT /api/servers/{id}/version", serverHandler.UpdateVersion)
 	mux.HandleFunc("PUT /api/servers/{id}/settings", serverHandler.UpdateSettings)
 	mux.HandleFunc("PUT /api/servers/{id}/auto-start", serverHandler.SetAutoStart)
+	mux.HandleFunc("PUT /api/servers/{id}/restart-on-crash", serverHandler.SetRestartOnCrash)
 	mux.HandleFunc("PUT /api/servers/{id}/flags", serverHandler.SetFlags)
 	mux.HandleFunc("PUT /api/servers/{id}/name", serverHandler.Rename)
 	mux.HandleFunc("DELETE /api/servers/{id}", serverHandler.Delete)
@@ -117,6 +118,7 @@ func main() {
 
 	// Version fetching
 	mux.HandleFunc("GET /api/versions/{type}", versionHandler.List)
+	mux.HandleFunc("GET /api/versions/{type}/{version}/java", versionHandler.Java)
 
 	// System settings
 	mux.HandleFunc("GET /api/settings", settingsHandler.Get)
@@ -164,6 +166,8 @@ func main() {
 	mux.HandleFunc("GET /api/servers/{id}/files/exists", fileHandler.Exists)
 	mux.HandleFunc("GET /api/servers/{id}/files/content", fileHandler.ReadContent)
 	mux.HandleFunc("PUT /api/servers/{id}/files/content", fileHandler.WriteContent)
+	mux.HandleFunc("GET /api/servers/{id}/files/versions", fileHandler.Versions)
+	mux.HandleFunc("GET /api/servers/{id}/files/versions/content", fileHandler.VersionContent)
 	mux.HandleFunc("POST /api/servers/{id}/files/upload", fileHandler.Upload)
 	mux.HandleFunc("DELETE /api/servers/{id}/files", fileHandler.Delete)
 	mux.HandleFunc("POST /api/servers/{id}/files/mkdir", fileHandler.MkDir)

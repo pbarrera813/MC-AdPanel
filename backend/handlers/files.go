@@ -98,6 +98,42 @@ func (h *FileHandler) ReadContent(w http.ResponseWriter, r *http.Request) {
 }
 
 // WriteContent handles PUT /api/servers/{id}/files/content
+func (h *FileHandler) Versions(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	subPath := r.URL.Query().Get("path")
+	if subPath == "" {
+		respondError(w, http.StatusBadRequest, "path parameter is required")
+		return
+	}
+
+	versions, err := h.mgr.ListFileVersions(id, subPath)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, versions)
+}
+
+func (h *FileHandler) VersionContent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	subPath := r.URL.Query().Get("path")
+	versionID := r.URL.Query().Get("id")
+	if subPath == "" || versionID == "" {
+		respondError(w, http.StatusBadRequest, "path and id parameters are required")
+		return
+	}
+
+	data, err := h.mgr.ReadFileVersion(id, subPath, versionID)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write(data)
+}
+
 func (h *FileHandler) WriteContent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -211,6 +247,8 @@ func (h *FileHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	if conflictAction == "replace" {
 		status = "replaced"
 	}
+	h.mgr.SyncServerJar(id, targetPath)
+	h.mgr.SyncVelocityConfig(id)
 	respondJSON(w, http.StatusOK, map[string]string{"status": status, "name": filepath.Base(targetPath)})
 }
 

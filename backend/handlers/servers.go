@@ -123,7 +123,7 @@ func (h *ServerHandler) Start(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.mgr.StartServer(id); err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+		respondError(w, http.StatusBadRequest, minecraft.FriendlyStartError(err))
 		return
 	}
 
@@ -145,7 +145,7 @@ func (h *ServerHandler) StartSafeMode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.mgr.StartServerSafeMode(id); err != nil {
-		respondError(w, http.StatusBadRequest, err.Error())
+		respondError(w, http.StatusBadRequest, minecraft.FriendlyStartError(err))
 		return
 	}
 
@@ -504,6 +504,25 @@ func (h *ServerHandler) SetFlags(w http.ResponseWriter, r *http.Request) {
 }
 
 // SetAutoStart handles PUT /api/servers/{id}/auto-start
+func (h *ServerHandler) SetRestartOnCrash(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var req struct {
+		RestartOnCrash bool `json:"restartOnCrash"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	server, err := h.mgr.SetRestartOnCrash(id, req.RestartOnCrash)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, server)
+}
+
 func (h *ServerHandler) SetAutoStart(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req struct {

@@ -41,33 +41,38 @@ type ServerConfig struct {
 	AutoStart           bool     `json:"autoStart"`
 	Flags               string   `json:"flags"`
 	AlwaysPreTouch      bool     `json:"alwaysPreTouch"`
+	RestartOnCrash      bool     `json:"restartOnCrash"`
 	BackupSchedule      string   `json:"backupSchedule,omitempty"`
 	LastScheduledBackup string   `json:"lastScheduledBackup,omitempty"`
 }
 
 // ServerInfo is the API-facing struct with runtime state
 type ServerInfo struct {
-	ID                 string  `json:"id"`
-	Name               string  `json:"name"`
-	Type               string  `json:"type"`
-	Version            string  `json:"version"`
-	Status             string  `json:"status"`
-	CPU                float64 `json:"cpu"`
-	RAM                float64 `json:"ram"`
-	TPS                float64 `json:"tps"`
-	Port               int     `json:"port"`
-	MaxRAM             string  `json:"maxRam"`
-	MinRAM             string  `json:"minRam"`
-	MaxPlayers         int     `json:"maxPlayers"`
-	AutoStart          bool    `json:"autoStart"`
-	Flags              string  `json:"flags"`
-	AlwaysPreTouch     bool    `json:"alwaysPreTouch"`
-	InstallError       string  `json:"installError,omitempty"`
-	FabricTpsAvailable bool    `json:"fabricTpsAvailable,omitempty"`
-	TpsStale           bool    `json:"tpsStale,omitempty"`
-	CPUExact           float64 `json:"cpuExact,omitempty"`
-	RAMBytes           uint64  `json:"ramBytes,omitempty"`
-	RAMMB              float64 `json:"ramMb,omitempty"`
+	ID                 string   `json:"id"`
+	Name               string   `json:"name"`
+	Type               string   `json:"type"`
+	Version            string   `json:"version"`
+	Status             string   `json:"status"`
+	CPU                float64  `json:"cpu"`
+	RAM                float64  `json:"ram"`
+	TPS                float64  `json:"tps"`
+	Port               int      `json:"port"`
+	MaxRAM             string   `json:"maxRam"`
+	MinRAM             string   `json:"minRam"`
+	MaxPlayers         int      `json:"maxPlayers"`
+	AutoStart          bool     `json:"autoStart"`
+	Flags              string   `json:"flags"`
+	AlwaysPreTouch     bool     `json:"alwaysPreTouch"`
+	InstallError       string   `json:"installError,omitempty"`
+	FabricTpsAvailable bool     `json:"fabricTpsAvailable,omitempty"`
+	TpsStale           bool     `json:"tpsStale,omitempty"`
+	CPUExact           float64  `json:"cpuExact,omitempty"`
+	RAMBytes           uint64   `json:"ramBytes,omitempty"`
+	RAMMB              float64  `json:"ramMb,omitempty"`
+	Players            int      `json:"players"`
+	StartedAt          string   `json:"startedAt,omitempty"`
+	RestartOnCrash     bool     `json:"restartOnCrash"`
+	Problem            *Problem `json:"problem,omitempty"`
 }
 
 // PluginInfo represents a plugin jar file
@@ -155,6 +160,10 @@ type runningServer struct {
 	stopTimer             *time.Timer
 	stopAt                time.Time
 	installError          string
+	stopRequested         bool
+	startedAt             time.Time
+	crashProblem          *Problem
+	crashTimes            []time.Time
 	lastTpsCmd            time.Time
 	lastTpsUpdate         time.Time
 	lastPlayerInfoCmd     time.Time
@@ -186,6 +195,7 @@ func clearScheduledActionsLocked(rs *runningServer) {
 
 func resetStoppedRuntimeStateLocked(rs *runningServer) {
 	rs.status = "Stopped"
+	rs.startedAt = time.Time{}
 	rs.cpu = 0
 	rs.ram = 0
 	rs.ramBytes = 0
@@ -235,11 +245,6 @@ func (e *ConfigPathSafetyError) Error() string {
 		reason = "server path is outside managed directories"
 	}
 	return fmt.Sprintf("%s: %s", serverConfigPathSafetyErrorCode, reason)
-}
-
-func IsConfigPathSafetyError(err error) bool {
-	var target *ConfigPathSafetyError
-	return errors.As(err, &target)
 }
 
 var (
@@ -795,8 +800,6 @@ func NewManager(baseDir string) (*Manager, error) {
 		return nil, err
 	}
 	mgr.quarantineUnsafeServerConfigs()
-	mgr.migrateBackupsToStableIDs()
-	mgr.migrateLegacyServerArtifacts()
 	if err := mgr.loadSettings(); err != nil {
 		return nil, err
 	}
@@ -969,34 +972,6 @@ func inferPlayerIPFromLogBuffer(rs *runningServer, playerName string) string {
 		}
 	}
 	return ""
-}
-
-func (m *Manager) migrateLegacyServerArtifacts() {
-	for _, cfg := range m.configs {
-		if cfg == nil {
-			continue
-		}
-
-		legacySourcesPath := legacyExtensionSourcesPath(cfg)
-		if legacyData, err := os.ReadFile(legacySourcesPath); err == nil {
-			newPath := m.extensionSourcesPath(cfg)
-			if _, err := os.Stat(newPath); os.IsNotExist(err) {
-				if err := os.MkdirAll(filepath.Dir(newPath), 0755); err != nil {
-					log.Printf("[%s] failed to create extension sources dir: %v", cfg.Name, err)
-				} else if err := os.WriteFile(newPath, legacyData, 0644); err != nil {
-					log.Printf("[%s] failed to migrate extension sources: %v", cfg.Name, err)
-				}
-			}
-			if err := os.Remove(legacySourcesPath); err != nil && !os.IsNotExist(err) {
-				log.Printf("[%s] failed to remove legacy extension sources file: %v", cfg.Name, err)
-			}
-		}
-
-		legacyConsoleHistoryPath := filepath.Join(cfg.Dir, ".console_history")
-		if err := os.Remove(legacyConsoleHistoryPath); err != nil && !os.IsNotExist(err) {
-			log.Printf("[%s] failed to remove legacy console history file: %v", cfg.Name, err)
-		}
-	}
 }
 
 // load reads servers.json into configs map
@@ -1217,6 +1192,10 @@ func writeManagedUserJVMArgs(path string, extraFlags []string) error {
 
 // StartServer starts the Minecraft process for the given server
 func (m *Manager) StartServer(id string) error {
+	// Before the Java runtime is resolved: a swapped jar can need a different Java.
+	jarChange := m.SyncServerJar(id, "")
+	m.SyncVelocityConfig(id)
+
 	m.mu.RLock()
 	cfg, err := m.serverConfigForOperationLocked(id)
 	rs, rsOk := m.running[id]
@@ -1262,7 +1241,7 @@ func (m *Manager) StartServer(id string) error {
 		jarPath := filepath.Join(cfg.Dir, cfg.JarFile)
 		if _, err := os.Stat(jarPath); os.IsNotExist(err) {
 			rs.mu.Unlock()
-			return fmt.Errorf("server.jar not found at %s - please place the server jar file in the server directory", jarPath)
+			return fmt.Errorf("no server jar found at %s - upload the server .jar to the server folder", jarPath)
 		}
 		jvmArgs := []string{
 			"-Xmx" + cfg.MaxRAM,
@@ -1301,6 +1280,9 @@ func (m *Manager) StartServer(id string) error {
 	rs.cmd = cmd
 	rs.stdin = stdinPipe
 	rs.status = "Booting"
+	rs.stopRequested = false
+	rs.crashProblem = nil
+	rs.startedAt = time.Time{}
 	rs.pid = cmd.Process.Pid
 	rs.cpu = 0
 	rs.ram = 0
@@ -1317,6 +1299,9 @@ func (m *Manager) StartServer(id string) error {
 	rs.stopMetrics = make(chan struct{})
 	rs.mu.Unlock()
 
+	if jarChange != "" {
+		m.broadcastLog(rs, m.appendLog(rs, fmt.Sprintf("[Orexa] Using %s as the server jar.", jarChange)))
+	}
 	m.refreshPingSupport(id)
 
 	log.Printf("[%s] Server starting (PID: %d) in %s", cfg.Name, rs.pid, cfg.Dir)
@@ -1326,16 +1311,31 @@ func (m *Manager) StartServer(id string) error {
 
 	go func() {
 		err := cmd.Wait()
+		m.mu.RLock()
+		restartOnCrash := cfg.RestartOnCrash
+		m.mu.RUnlock()
 		rs.mu.Lock()
 		if rs.status == "Running" || rs.status == "Booting" {
-			if err != nil {
+			if err != nil && !rs.stopRequested {
 				rs.status = "Crashed"
+				rs.crashProblem = diagnoseCrash(lastLogLines(rs.logBuffer, crashLogLines), err, cfg.Port)
 				log.Printf("[%s] Server crashed: %v", cfg.Name, err)
+				if restartOnCrash {
+					restart, kept := crashRestartDecision(rs.crashTimes, time.Now())
+					rs.crashTimes = kept
+					if restart {
+						rs.crashProblem.Hint = fmt.Sprintf("Restarting automatically in a few seconds (attempt %d of %d). %s", len(kept), crashRestartLimit, rs.crashProblem.Hint)
+						time.AfterFunc(crashRestartDelay, func() { m.restartAfterCrash(id, rs) })
+					} else {
+						rs.crashProblem.Hint = fmt.Sprintf("Restarted %d times in %d minutes, so Orexa stopped trying. %s", crashRestartLimit, int(crashRestartWindow.Minutes()), rs.crashProblem.Hint)
+					}
+				}
 			} else {
 				rs.status = "Stopped"
 				log.Printf("[%s] Server stopped gracefully", cfg.Name)
 			}
 		}
+		rs.startedAt = time.Time{}
 		rs.cpu = 0
 		rs.ram = 0
 		rs.ramBytes = 0
@@ -1370,6 +1370,24 @@ func (m *Manager) StartServer(id string) error {
 	go m.collectMetrics(id, rs)
 
 	return nil
+}
+
+func (m *Manager) restartAfterCrash(id string, rs *runningServer) {
+	rs.mu.RLock()
+	stillCrashed := rs.status == "Crashed"
+	rs.mu.RUnlock()
+
+	m.mu.RLock()
+	cfg := m.configs[id]
+	enabled := cfg != nil && cfg.RestartOnCrash
+	m.mu.RUnlock()
+
+	if !stillCrashed || !enabled {
+		return
+	}
+	if err := m.StartServer(id); err != nil {
+		log.Printf("[%s] Automatic restart after crash failed: %v", cfg.Name, err)
+	}
 }
 
 // StartServerSafeMode starts a server with plugins/mods disabled
@@ -1441,6 +1459,7 @@ func (m *Manager) scanOutput(id string, rs *runningServer, pipe io.Reader) {
 			isReadyLine := strings.Contains(clean, "! For help,") || strings.Contains(clean, ")!")
 			if isReadyLine {
 				rs.status = "Running"
+				rs.startedAt = time.Now()
 				// Run one list scan shortly after boot to hydrate player list state.
 				scheduleListRefreshLocked(rs, 2*time.Second)
 				cfg := m.configs[id]
@@ -1848,6 +1867,7 @@ func (m *Manager) StopServer(id string) error {
 		rs.mu.Unlock()
 		return fmt.Errorf("server %s is not running (status: %s)", id, rs.status)
 	}
+	rs.stopRequested = true
 
 	if rs.stdin != nil {
 		_, err := io.WriteString(rs.stdin, "stop\n")
@@ -1901,6 +1921,7 @@ func (m *Manager) KillServer(id string) error {
 		rs.mu.Unlock()
 		return fmt.Errorf("server %s is not running (status: %s)", id, rs.status)
 	}
+	rs.stopRequested = true
 	cmd := rs.cmd
 	stopMetrics := rs.stopMetrics
 	rs.mu.Unlock()
@@ -2141,6 +2162,7 @@ func (m *Manager) serverInfo(id string) *ServerInfo {
 		AutoStart:      cfg.AutoStart,
 		Flags:          cfg.Flags,
 		AlwaysPreTouch: cfg.AlwaysPreTouch,
+		RestartOnCrash: cfg.RestartOnCrash,
 		Status:         "Stopped",
 	}
 	if strings.EqualFold(cfg.Type, "fabric") {
@@ -2157,6 +2179,16 @@ func (m *Manager) serverInfo(id string) *ServerInfo {
 		info.RAMMB = bytesToMB(rs.ramBytes)
 		info.TPS = rs.tps
 		info.InstallError = rs.installError
+		info.Players = len(rs.players)
+		if info.Status == "Running" && !rs.startedAt.IsZero() {
+			info.StartedAt = rs.startedAt.UTC().Format(time.RFC3339)
+		}
+		switch info.Status {
+		case "Error":
+			info.Problem = friendlyInstallError(rs.installError)
+		case "Crashed":
+			info.Problem = rs.crashProblem
+		}
 		lastTpsUpdate := rs.lastTpsUpdate
 		rs.mu.RUnlock()
 
@@ -2333,7 +2365,6 @@ func (m *Manager) UpdateSettings(id, minRAM, maxRAM string, maxPlayers int, port
 	return m.serverInfo(id), nil
 }
 
-// UpdateVersion updates a server to a newer server jar version (server must be stopped).
 func (m *Manager) UpdateVersion(id, version string) (*ServerInfo, error) {
 	version = strings.TrimSpace(version)
 	if version == "" {
@@ -2393,6 +2424,38 @@ func (m *Manager) SetAutoStart(id string, enabled bool) (*ServerInfo, error) {
 	m.persist()
 
 	return m.serverInfo(id), nil
+}
+
+func (m *Manager) SetRestartOnCrash(id string, enabled bool) (*ServerInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	cfg, err := m.serverConfigForOperationLocked(id)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg.RestartOnCrash = enabled
+	if err := m.persist(); err != nil {
+		return nil, err
+	}
+
+	return m.serverInfo(id), nil
+}
+
+type JavaPreflight struct {
+	OK       bool   `json:"ok"`
+	Required int    `json:"required,omitempty"`
+	Selected int    `json:"selected,omitempty"`
+	Message  string `json:"message,omitempty"`
+}
+
+func (m *Manager) JavaPreflight(serverType, version string) JavaPreflight {
+	_, required, selected, err := m.javaResolver.resolve(serverType, version)
+	if err != nil {
+		return JavaPreflight{Required: required, Message: friendlyJavaMessage(err)}
+	}
+	return JavaPreflight{OK: true, Required: required, Selected: selected}
 }
 
 // SetFlags updates the JVM flags preset for a server
@@ -2564,6 +2627,9 @@ func (m *Manager) DeleteServer(id string) error {
 	if err := os.RemoveAll(backupPath); err != nil {
 		log.Printf("Warning: failed to delete backup directory %s: %v", backupPath, err)
 	}
+	if err := os.RemoveAll(m.fileVersionsRoot(id)); err != nil {
+		log.Printf("Warning: failed to delete saved file versions for %s: %v", id, err)
+	}
 
 	delete(m.configs, id)
 	delete(m.running, id)
@@ -2611,13 +2677,6 @@ func (m *Manager) serverConfigForOperationLocked(id string) (*ServerConfig, erro
 		return nil, m.configPathErrorLocked(id, err.Error())
 	}
 	return cfg, nil
-}
-
-func (m *Manager) EnsureServerOperational(id string) error {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	_, err := m.serverConfigForOperationLocked(id)
-	return err
 }
 
 func (m *Manager) validateManagedServerDir(serverDir string) error {
@@ -2694,41 +2753,6 @@ func (m *Manager) backupFolderKey(cfg *ServerConfig) string {
 		id = "server"
 	}
 	return id
-}
-
-func (m *Manager) legacyBackupDir(cfg *ServerConfig) string {
-	if cfg == nil {
-		return filepath.Join(m.backupsRoot, "server")
-	}
-	return filepath.Join(m.backupsRoot, sanitizeName(cfg.Name))
-}
-
-func (m *Manager) migrateBackupsToStableIDs() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	for _, cfg := range m.configs {
-		if cfg == nil {
-			continue
-		}
-		oldDir := m.legacyBackupDir(cfg)
-		newDir := m.backupDir(cfg)
-		if samePath(oldDir, newDir) {
-			continue
-		}
-		if err := m.validateManagedBackupDir(oldDir); err != nil {
-			continue
-		}
-		if err := m.validateManagedBackupDir(newDir); err != nil {
-			continue
-		}
-		if _, err := os.Stat(oldDir); err != nil {
-			continue
-		}
-		if err := m.migrateBackupDir(oldDir, newDir); err != nil {
-			log.Printf("[%s] failed to migrate backup directory to stable key: %v", cfg.Name, err)
-		}
-	}
 }
 
 func ensurePathWithinBase(baseAbs, targetAbs string) error {
@@ -2920,10 +2944,6 @@ func extensionsDir(cfg *ServerConfig) string {
 	default:
 		return filepath.Join(cfg.Dir, "plugins")
 	}
-}
-
-func legacyExtensionSourcesPath(cfg *ServerConfig) string {
-	return filepath.Join(cfg.Dir, ".adpanel-extension-sources.json")
 }
 
 func normalizeExtensionSourceKey(fileName string) string {
@@ -3655,9 +3675,10 @@ func (m *Manager) installServerJar(id, serverType, version string) {
 		}
 	}
 
-	// Persist resolved/new version after a successful install/update.
+	// Every downloader writes server.jar, so run that one even if a custom-named jar was configured.
 	m.mu.Lock()
 	cfg.Version = actualVersion
+	cfg.JarFile = "server.jar"
 	m.persist()
 	m.mu.Unlock()
 

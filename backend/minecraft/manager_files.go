@@ -100,7 +100,12 @@ func (m *Manager) WriteFileContent(id, subPath string, content []byte) error {
 		return err
 	}
 
-	return os.WriteFile(filePath, content, 0644)
+	m.saveFileVersionBeforeWrite(id, subPath, filePath, content)
+	if err := os.WriteFile(filePath, content, 0644); err != nil {
+		return err
+	}
+	m.SyncVelocityConfig(id)
+	return nil
 }
 
 // DeletePath removes a file or directory within a server directory
@@ -149,6 +154,10 @@ func (m *Manager) CreateDirectory(id, subPath string) error {
 func (m *Manager) RenamePath(id, oldSubPath, newName string) error {
 	m.mu.RLock()
 	cfg, err := m.serverConfigForOperationLocked(id)
+	jarFile := ""
+	if err == nil {
+		jarFile = cfg.JarFile
+	}
 	m.mu.RUnlock()
 	if err != nil {
 		return err
@@ -175,5 +184,11 @@ func (m *Manager) RenamePath(id, oldSubPath, newName string) error {
 		return fmt.Errorf("a file or folder named %q already exists", newName)
 	}
 
-	return os.Rename(oldPath, newPath)
+	if err := os.Rename(oldPath, newPath); err != nil {
+		return err
+	}
+	if filepath.ToSlash(filepath.Clean(oldSubPath)) == jarFile {
+		m.SyncServerJar(id, filepath.ToSlash(filepath.Join(filepath.Dir(oldSubPath), newName)))
+	}
+	return nil
 }

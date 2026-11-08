@@ -32,3 +32,14 @@ func (h *VersionHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	respondJSON(w, http.StatusOK, versions)
 }
+
+func (h *VersionHandler) Java(w http.ResponseWriter, r *http.Request) {
+	serverType := r.PathValue("type")
+	version := r.PathValue("version")
+	if serverType == "" || version == "" {
+		respondError(w, http.StatusBadRequest, "Server type and version are required")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, h.mgr.JavaPreflight(serverType, version))
+}
