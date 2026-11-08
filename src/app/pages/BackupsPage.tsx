@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useServer, Backup } from '../context/ServerContext';
 import { Archive, Clock, Download, Upload, Trash2, Plus, Loader2, AlertTriangle, CalendarClock, X, Check, Square } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
+import { Modal } from '../components/ui/modal';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import clsx from 'clsx';
@@ -381,170 +382,120 @@ export const BackupsPage = () => {
         </div>
       )}
 
-      {/* Delete Confirmation Modal */}
-      <AnimatePresence>
-        {deleteTarget && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-[#252524] border border-red-900/50 rounded-lg shadow-2xl p-6"
-            >
-              <div className="flex items-center gap-3 text-red-500 mb-4">
-                <AlertTriangle size={24} />
-                <h3 className="text-xl font-bold">Delete Backup?</h3>
-              </div>
-              <p className="text-gray-300 mb-6">Are you sure you want to delete the chosen file?</p>
-              <div className="flex justify-end gap-3">
-                <button onClick={() => setDeleteTarget(null)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
-                <button onClick={() => handleDelete(deleteTarget)} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Delete</button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <Modal open={deleteTarget} tone="danger">
+        <div className="flex items-center gap-3 text-red-500 mb-4">
+          <AlertTriangle size={24} />
+          <h3 className="text-xl font-bold">Delete Backup?</h3>
+        </div>
+        <p className="text-gray-300 mb-6">Are you sure you want to delete the chosen file?</p>
+        <div className="flex justify-end gap-3">
+          <button onClick={() => setDeleteTarget(null)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
+          <button onClick={() => handleDelete(deleteTarget)} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Delete</button>
+        </div>
+      </Modal>
 
-      {/* Restore Confirmation Modal */}
-      <AnimatePresence>
-        {restoreTarget && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-[#252524] border border-blue-900/50 rounded-lg shadow-2xl p-6"
-            >
-              <div className="flex items-center gap-3 text-blue-400 mb-4">
-                <Upload size={24} />
-                <h3 className="text-xl font-bold">Restore Backup?</h3>
-              </div>
-              <p className="text-gray-300 mb-2">
-                Are you sure you want to restore <span className="font-mono text-white">{restoreTarget}</span>?
-              </p>
-              <p className="text-yellow-400 text-sm mb-6">
-                This will replace all current server files with the backup contents. The server must be stopped.
-              </p>
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={() => setRestoreTarget(null)}
-                  disabled={restoring}
-                  className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => handleRestore(restoreTarget)}
-                  disabled={restoring}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded font-bold flex items-center gap-2 disabled:opacity-50"
-                >
-                  {restoring && <Loader2 size={16} className="animate-spin" />}
-                  {restoring ? 'Restoring...' : 'Restore'}
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <Modal open={restoreTarget} tone="info">
+        <div className="flex items-center gap-3 text-blue-400 mb-4">
+          <Upload size={24} />
+          <h3 className="text-xl font-bold">Restore Backup?</h3>
+        </div>
+        <p className="text-gray-300 mb-2">
+          Are you sure you want to restore <span className="font-mono text-white">{restoreTarget}</span>?
+        </p>
+        <p className="text-yellow-400 text-sm mb-6">
+          This will replace all current server files with the backup contents. The server must be stopped.
+        </p>
+        <div className="flex justify-end gap-3">
+          <button
+            onClick={() => setRestoreTarget(null)}
+            disabled={restoring}
+            className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => handleRestore(restoreTarget)}
+            disabled={restoring}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded font-bold flex items-center gap-2 disabled:opacity-50"
+          >
+            {restoring && <Loader2 size={16} className="animate-spin" />}
+            {restoring ? 'Restoring...' : 'Restore'}
+          </button>
+        </div>
+      </Modal>
 
-      {/* Batch Delete Confirmation Modal */}
-      <AnimatePresence>
-        {batchDeleteConfirm && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setBatchDeleteConfirm(false)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-[#252524] border border-red-900/50 rounded-lg shadow-2xl p-6"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center gap-3 text-red-500 mb-4">
-                <AlertTriangle size={24} />
-                <h3 className="text-xl font-bold">Delete {selectedBackups.size} Backup{selectedBackups.size > 1 ? 's' : ''}?</h3>
-              </div>
-              <p className="text-gray-300 mb-6">
-                Are you sure you want to delete the chosen files?
-              </p>
-              <div className="flex justify-end gap-3">
-                <button onClick={() => setBatchDeleteConfirm(false)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
-                <button onClick={handleBatchDelete} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Delete</button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <Modal open={batchDeleteConfirm} tone="danger" onBackdropClick={() => setBatchDeleteConfirm(false)}>
+        <div className="flex items-center gap-3 text-red-500 mb-4">
+          <AlertTriangle size={24} />
+          <h3 className="text-xl font-bold">Delete {selectedBackups.size} Backup{selectedBackups.size > 1 ? 's' : ''}?</h3>
+        </div>
+        <p className="text-gray-300 mb-6">
+          Are you sure you want to delete the chosen files?
+        </p>
+        <div className="flex justify-end gap-3">
+          <button onClick={() => setBatchDeleteConfirm(false)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
+          <button onClick={handleBatchDelete} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Delete</button>
+        </div>
+      </Modal>
       {undoOverlay}
 
-      {/* Schedule Backups Popup */}
-      <AnimatePresence>
-        {schedulePopup && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setSchedulePopup(false)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-[#252524] border border-[#E5B80B]/30 rounded-lg shadow-2xl p-6"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-3 text-[#E5B80B]">
-                  <CalendarClock size={24} />
-                  <h3 className="text-xl font-bold text-white">Schedule Backups</h3>
-                </div>
-                <button onClick={() => setSchedulePopup(false)} className="text-gray-500 hover:text-white transition-colors">
-                  <X size={20} />
-                </button>
-              </div>
-
-              <div className="flex flex-col gap-2 mb-6">
-                {([
-                  { value: '', label: 'Disabled', desc: 'No automatic backups' },
-                  { value: 'daily', label: 'Daily', desc: 'Every 24 hours' },
-                  { value: 'weekly', label: 'Weekly', desc: 'Every 7 days' },
-                  { value: 'monthly', label: 'Monthly', desc: 'Once a month' },
-                  { value: 'sixmonths', label: 'Every 6 Months', desc: 'Twice a year' },
-                  { value: 'yearly', label: 'Yearly', desc: 'Once a year' },
-                ] as const).map(opt => (
-                  <button
-                    key={opt.value}
-                    onClick={() => setSelectedSchedule(opt.value)}
-                    className={clsx(
-                      "px-4 py-3 rounded border text-left transition-all",
-                      selectedSchedule === opt.value
-                        ? "border-[#E5B80B] bg-[#E5B80B]/10 text-white"
-                        : "border-[#3a3a3a] bg-[#1a1a1a] text-gray-400 hover:border-[#E5B80B]/40 hover:text-white"
-                    )}
-                  >
-                    <div className="text-sm font-medium">{opt.label}</div>
-                    <div className="text-xs text-gray-500 mt-0.5">{opt.desc}</div>
-                  </button>
-                ))}
-              </div>
-
-              {nextBackup && currentSchedule && (
-                <p className="text-xs text-gray-500 mb-4">
-                  Next backup: {format(new Date(nextBackup), 'MMM d, yyyy HH:mm')}
-                </p>
-              )}
-
-              <div className="flex justify-end gap-3 pt-4 border-t border-[#3a3a3a]">
-                <button
-                  onClick={() => setSchedulePopup(false)}
-                  className="px-4 py-2 rounded text-gray-400 hover:text-white hover:bg-[#3a3a3a] transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleSaveSchedule}
-                  className="px-4 py-2 rounded font-bold bg-[#E5B80B] text-black hover:bg-[#d4a90a] transition-colors"
-                >
-                  Accept
-                </button>
-              </div>
-            </motion.div>
+      <Modal open={schedulePopup} tone="accent" onBackdropClick={() => setSchedulePopup(false)}>
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3 text-[#E5B80B]">
+            <CalendarClock size={24} />
+            <h3 className="text-xl font-bold text-white">Schedule Backups</h3>
           </div>
+          <button onClick={() => setSchedulePopup(false)} className="text-gray-500 hover:text-white transition-colors">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="flex flex-col gap-2 mb-6">
+          {([
+            { value: '', label: 'Disabled', desc: 'No automatic backups' },
+            { value: 'daily', label: 'Daily', desc: 'Every 24 hours' },
+            { value: 'weekly', label: 'Weekly', desc: 'Every 7 days' },
+            { value: 'monthly', label: 'Monthly', desc: 'Once a month' },
+            { value: 'sixmonths', label: 'Every 6 Months', desc: 'Twice a year' },
+            { value: 'yearly', label: 'Yearly', desc: 'Once a year' },
+          ] as const).map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => setSelectedSchedule(opt.value)}
+              className={clsx(
+                "px-4 py-3 rounded border text-left transition-all",
+                selectedSchedule === opt.value
+                  ? "border-[#E5B80B] bg-[#E5B80B]/10 text-white"
+                  : "border-[#3a3a3a] bg-[#1a1a1a] text-gray-400 hover:border-[#E5B80B]/40 hover:text-white"
+              )}
+            >
+              <div className="text-sm font-medium">{opt.label}</div>
+              <div className="text-xs text-gray-500 mt-0.5">{opt.desc}</div>
+            </button>
+          ))}
+        </div>
+
+        {nextBackup && currentSchedule && (
+          <p className="text-xs text-gray-500 mb-4">
+            Next backup: {format(new Date(nextBackup), 'MMM d, yyyy HH:mm')}
+          </p>
         )}
-      </AnimatePresence>
+
+        <div className="flex justify-end gap-3 pt-4 border-t border-[#3a3a3a]">
+          <button
+            onClick={() => setSchedulePopup(false)}
+            className="px-4 py-2 rounded text-gray-400 hover:text-white hover:bg-[#3a3a3a] transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSaveSchedule}
+            className="px-4 py-2 rounded font-bold bg-[#E5B80B] text-black hover:bg-[#d4a90a] transition-colors"
+          >
+            Accept
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 };

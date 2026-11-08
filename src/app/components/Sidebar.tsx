@@ -1,5 +1,5 @@
-import React from 'react';
-import { Server, Terminal, Box, Database, FileText, Copy, Layers, Sliders } from 'lucide-react';
+import { Terminal, Box, Database, FileText, Copy, Layers, Sliders } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { useServer } from '../context/ServerContext';
 import clsx from 'clsx';
 import { AnimatePresence, motion } from 'motion/react';
@@ -14,11 +14,19 @@ interface SidebarProps {
   className?: string;
 }
 
+type MenuItem = {
+  id: View;
+  label: string;
+  icon: LucideIcon;
+  disabled?: boolean;
+  disabledReason?: string;
+};
+
 export const Sidebar = ({ currentView, setCurrentView, className }: SidebarProps) => {
   const { activeServer } = useServer();
   const pluginsUnsupportedForType = activeServer?.type === 'Vanilla';
 
-  const menuItems = [
+  const menuItems: MenuItem[] = [
     { id: 'servers', label: 'Servers', icon: Layers },
     { id: 'management', label: 'Management', icon: Terminal, disabled: !activeServer },
     { id: 'plugins', label: 'Plugins / Mods', icon: Box, disabled: !activeServer || pluginsUnsupportedForType, disabledReason: pluginsUnsupportedForType ? 'Not supported on this server type' : '' },
@@ -26,7 +34,7 @@ export const Sidebar = ({ currentView, setCurrentView, className }: SidebarProps
     { id: 'logs', label: 'Logs', icon: FileText, disabled: !activeServer },
     { id: 'cloning', label: 'Cloning', icon: Copy },
     { id: 'settings', label: 'System Settings', icon: Sliders },
-  ] as const;
+  ];
 
   return (
     <div className={clsx("w-64 h-full bg-[#202020] text-gray-300 flex flex-col border-r border-[#3a3a3a]", className)}>
@@ -86,4 +94,3 @@ export const Sidebar = ({ currentView, setCurrentView, className }: SidebarProps
     </div>
   );
 };
-

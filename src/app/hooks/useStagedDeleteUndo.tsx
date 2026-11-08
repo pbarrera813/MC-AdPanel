@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Trash2, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { toast } from 'sonner';
@@ -32,6 +32,7 @@ const defaultErrorMessage = 'Failed to delete the selected item(s).';
 export const useStagedDeleteUndo = () => {
   const [actions, setActions] = useState<DeferredDeleteAction[]>([]);
   const actionsRef = useRef<DeferredDeleteAction[]>([]);
+  const committingIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     actionsRef.current = actions;
@@ -39,7 +40,8 @@ export const useStagedDeleteUndo = () => {
 
   const commitAction = useCallback(async (id: string) => {
     const action = actionsRef.current.find((item) => item.id === id);
-    if (!action || action.committing) return;
+    if (!action || action.committing || committingIdsRef.current.has(id)) return;
+    committingIdsRef.current.add(id);
 
     setActions((prev) => prev.map((item) => (item.id === id ? { ...item, committing: true } : item)));
 
@@ -52,6 +54,7 @@ export const useStagedDeleteUndo = () => {
       action.onUndo();
       toast.error(action.errorMessage || defaultErrorMessage);
     } finally {
+      committingIdsRef.current.delete(id);
       setActions((prev) => prev.filter((item) => item.id !== id));
     }
   }, []);
@@ -106,11 +109,35 @@ export const useStagedDeleteUndo = () => {
 
   const undoAction = useCallback((id: string) => {
     const action = actionsRef.current.find((item) => item.id === id);
-    if (!action || action.committing) return;
+    if (!action || action.committing || committingIdsRef.current.has(id)) return;
 
     action.onUndo();
     setActions((prev) => prev.filter((item) => item.id !== id));
     toast.info(action.undoMessage || 'Deletion undone.');
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      const pending = actionsRef.current.filter(
+        (action) => !action.committing && !committingIdsRef.current.has(action.id)
+      );
+      pending.forEach((action) => {
+        committingIdsRef.current.add(action.id);
+        void action.onCommit()
+          .then(() => {
+            if (action.successMessage) {
+              toast.success(action.successMessage);
+            }
+          })
+          .catch(() => {
+            action.onUndo();
+            toast.error(action.errorMessage || defaultErrorMessage);
+          })
+          .finally(() => {
+            committingIdsRef.current.delete(action.id);
+          });
+      });
+    };
   }, []);
 
   const undoOverlay = useMemo(

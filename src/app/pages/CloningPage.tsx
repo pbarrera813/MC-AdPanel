@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useServer } from '../context/ServerContext';
 import { Copy, Check } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { Modal } from '../components/ui/modal';
 import { toast } from 'sonner';
 import clsx from 'clsx';
 import { useEscapeKey } from '../hooks/useEscapeKey';
@@ -172,98 +172,87 @@ export const CloningPage = () => {
         </button>
       </div>
 
-      <AnimatePresence>
-        {isModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6"
-            >
-              <h3 className="text-xl font-bold text-white mb-6">
-                {selectedSourceIds.size > 1 ? `Clone ${selectedSourceIds.size} Servers` : 'Clone Settings'}
-              </h3>
+      <Modal open={isModalOpen}>
+        <h3 className="text-xl font-bold text-white mb-6">
+          {selectedSourceIds.size > 1 ? `Clone ${selectedSourceIds.size} Servers` : 'Clone Settings'}
+        </h3>
 
-              <div className="space-y-4 mb-6">
-                {selectedSourceIds.size === 1 && (
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">New Server Name</label>
-                    <input
-                      type="text"
-                      value={newName}
-                      onChange={e => setNewName(e.target.value)}
-                      className="w-full bg-[#1a1a1a] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#E5B80B]"
-                    />
-                  </div>
-                )}
+        <div className="space-y-4 mb-6">
+          {selectedSourceIds.size === 1 && (
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">New Server Name</label>
+              <input
+                type="text"
+                value={newName}
+                onChange={e => setNewName(e.target.value)}
+                className="w-full bg-[#1a1a1a] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#E5B80B]"
+              />
+            </div>
+          )}
 
-                <div>
-                  <label className="block text-sm text-gray-400 mb-1">
-                    {selectedSourceIds.size > 1 ? 'Starting Port' : 'Server Port'}
-                  </label>
-                  <input
-                    type="number"
-                    value={newPort}
-                    onChange={e => setNewPort(parseInt(e.target.value) || 25565)}
-                    min={1024}
-                    max={65535}
-                    className="w-full bg-[#1a1a1a] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#E5B80B]"
-                  />
-                  {selectedSourceIds.size > 1 && (
-                    <p className="text-xs text-gray-500 mt-1">
-                      Ports will use the closest available values from {newPort}.
-                    </p>
-                  )}
-                </div>
-
-                <div className="space-y-2">
-                  <label className="flex items-center gap-2 text-gray-300 cursor-pointer select-none">
-                    <Checkbox
-                      checked={options.plugins}
-                      onCheckedChange={(checked) => setOptions({ ...options, plugins: checked === true })}
-                    />
-                    Copy Plugins & Mods
-                  </label>
-                  <label className="flex items-center gap-2 text-gray-300 cursor-pointer select-none">
-                    <Checkbox
-                      checked={options.worlds}
-                      onCheckedChange={(checked) => setOptions({ ...options, worlds: checked === true })}
-                    />
-                    Copy Worlds (This may take time)
-                  </label>
-                  <label className="flex items-center gap-2 text-gray-300 cursor-pointer select-none">
-                    <Checkbox
-                      checked={options.config}
-                      onCheckedChange={(checked) => setOptions({ ...options, config: checked === true })}
-                    />
-                    Copy Configuration Files
-                  </label>
-                </div>
-
-                {selectedSourceIds.size > 1 && (
-                  <div className="bg-[#1a1a1a] border border-[#333] rounded p-3">
-                    <p className="text-xs text-gray-400 mb-2">Servers to clone:</p>
-                    <ul className="text-sm text-gray-300 space-y-1">
-                      {selectedSources.map((s, i) => (
-                        <li key={s.id} className="flex items-center gap-2">
-                          <span className="w-1.5 h-1.5 rounded-full bg-[#E5B80B] flex-shrink-0" />
-                          {s.name} <span className="text-gray-500 text-xs">-&gt; Port {clonePortPlan[i]}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex justify-end gap-3">
-                <button onClick={() => setIsModalOpen(false)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
-                <button onClick={handleClone} className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold">Confirm Clone</button>
-              </div>
-            </motion.div>
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">
+              {selectedSourceIds.size > 1 ? 'Starting Port' : 'Server Port'}
+            </label>
+            <input
+              type="number"
+              value={newPort}
+              onChange={e => setNewPort(parseInt(e.target.value) || 25565)}
+              min={1024}
+              max={65535}
+              className="w-full bg-[#1a1a1a] border border-[#333] rounded px-3 py-2 text-white focus:outline-none focus:border-[#E5B80B]"
+            />
+            {selectedSourceIds.size > 1 && (
+              <p className="text-xs text-gray-500 mt-1">
+                Ports will use the closest available values from {newPort}.
+              </p>
+            )}
           </div>
-        )}
-      </AnimatePresence>
+
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-gray-300 cursor-pointer select-none">
+              <Checkbox
+                checked={options.plugins}
+                onCheckedChange={(checked) => setOptions({ ...options, plugins: checked === true })}
+              />
+              Copy Plugins & Mods
+            </label>
+            <label className="flex items-center gap-2 text-gray-300 cursor-pointer select-none">
+              <Checkbox
+                checked={options.worlds}
+                onCheckedChange={(checked) => setOptions({ ...options, worlds: checked === true })}
+              />
+              Copy Worlds (This may take time)
+            </label>
+            <label className="flex items-center gap-2 text-gray-300 cursor-pointer select-none">
+              <Checkbox
+                checked={options.config}
+                onCheckedChange={(checked) => setOptions({ ...options, config: checked === true })}
+              />
+              Copy Configuration Files
+            </label>
+          </div>
+
+          {selectedSourceIds.size > 1 && (
+            <div className="bg-[#1a1a1a] border border-[#333] rounded p-3">
+              <p className="text-xs text-gray-400 mb-2">Servers to clone:</p>
+              <ul className="text-sm text-gray-300 space-y-1">
+                {selectedSources.map((s, i) => (
+                  <li key={s.id} className="flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#E5B80B] flex-shrink-0" />
+                    {s.name} <span className="text-gray-500 text-xs">-&gt; Port {clonePortPlan[i]}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-3">
+          <button onClick={() => setIsModalOpen(false)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
+          <button onClick={handleClone} className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold">Confirm Clone</button>
+        </div>
+      </Modal>
     </div>
   );
 };

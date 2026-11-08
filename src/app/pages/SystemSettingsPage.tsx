@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader2, Cpu, HardDrive, ChevronDown, ChevronUp, Settings, Square, X } from 'lucide-react';
 import { Area, AreaChart, ResponsiveContainer } from 'recharts';
 import { toast } from 'sonner';
@@ -56,6 +56,19 @@ type SettingsSnapshot = {
   tpsPollInterval: string;
   playerSyncInterval: string;
   pingPollInterval: string;
+};
+
+type SettingsResponse = {
+  loginUser?: string;
+  passwordMinLength?: number;
+  userAgent?: string;
+  defaultMinRam?: string;
+  defaultMaxRam?: string;
+  defaultFlags?: string;
+  statusPollInterval?: number;
+  tpsPollInterval?: number;
+  playerSyncInterval?: number;
+  pingPollInterval?: number;
 };
 
 type SystemSettingsPageProps = {
@@ -209,7 +222,7 @@ export const SystemSettingsPage = ({ onViewChange }: SystemSettingsPageProps) =>
     let isMounted = true;
     const loadSettings = async () => {
       try {
-        const data = await apiRequest('/api/settings', undefined, 'Couldn’t load settings.');
+        const data = await apiRequest<SettingsResponse>('/api/settings', undefined, 'Couldn’t load settings.');
         if (isMounted) {
           setLoginUser(data.loginUser || 'mcpanel');
           if (typeof data.passwordMinLength === 'number' && data.passwordMinLength > 0) {

@@ -1,5 +1,4 @@
 import React from 'react';
-import { Button } from './ui/button';
 
 type State = { error: Error | null; info: React.ErrorInfo | null };
 

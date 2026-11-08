@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useServer } from '../context/ServerContext';
-import { FileText, AlertTriangle, Download, Copy, Trash2, Search, Filter, Pause, Play, Check, Square, ChevronsDown } from 'lucide-react';
+import { FileText, AlertTriangle, Download, Copy, Trash2, Search, Pause, Play, Check, Square, ChevronsDown } from 'lucide-react';
 import { clsx } from 'clsx';
 import { toast } from 'sonner';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
+import { Modal } from '../components/ui/modal';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { useStagedDeleteUndo } from '../hooks/useStagedDeleteUndo';
 import { apiRequest, toErrorMessage } from '../lib/api';
@@ -47,7 +48,6 @@ async function copyToClipboard(text: string) {
 }
 
 export const LogsPage = () => {
-  const { activeServer } = useServer();
   const [activeTab, setActiveTab] = useState<LogTab>('live');
 
   return (
@@ -383,94 +383,58 @@ const StoredLogs = ({ serverId }: { serverId: string }) => {
         </table>
       </div>
 
-      {/* Viewer modal */}
-      <AnimatePresence>
-        {viewer.name && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-4xl bg-[#0f0f0f] border border-[#404040] rounded-lg shadow-2xl max-h-[80vh] overflow-hidden flex flex-col"
+      <Modal open={viewer.name} size="xl" className="bg-[#0f0f0f] max-h-[80vh] overflow-hidden flex flex-col p-0">
+        <div className="sticky top-0 z-10 bg-[#0f0f0f] border-b border-[#2f2f2f] px-4 py-3 flex items-center justify-between gap-3">
+          <h3 className="text-lg font-bold truncate">{viewer.name}</h3>
+          <div className="flex gap-2">
+            <button
+              onClick={async () => {
+                try {
+                  await copyToClipboard(viewer.content || '');
+                  toast.info('Log copied to clipboard.');
+                } catch {
+                  toast.error('Failed to copy log');
+                }
+              }}
+              className="px-3 py-1 bg-[#333] rounded text-sm"
             >
-              <div className="sticky top-0 z-10 bg-[#0f0f0f] border-b border-[#2f2f2f] px-4 py-3 flex items-center justify-between gap-3">
-                <h3 className="text-lg font-bold truncate">{viewer.name}</h3>
-                <div className="flex gap-2">
-                  <button
-                    onClick={async () => {
-                      try {
-                        await copyToClipboard(viewer.content || '');
-                        toast.info('Log copied to clipboard.');
-                      } catch {
-                        toast.error('Failed to copy log');
-                      }
-                    }}
-                    className="px-3 py-1 bg-[#333] rounded text-sm"
-                  >
-                    Copy
-                  </button>
-                  <button onClick={() => setViewer({ name: null, content: null })} className="px-3 py-1 bg-[#E5B80B] rounded text-sm text-black">Close</button>
-                </div>
-              </div>
-              <div className="flex-1 min-h-0 overflow-auto p-4">
-                <pre className="text-xs font-mono text-gray-200 whitespace-pre-wrap">{viewer.content}</pre>
-              </div>
-            </motion.div>
+              Copy
+            </button>
+            <button onClick={() => setViewer({ name: null, content: null })} className="px-3 py-1 bg-[#E5B80B] rounded text-sm text-black">Close</button>
           </div>
-        )}
-      </AnimatePresence>
+        </div>
+        <div className="flex-1 min-h-0 overflow-auto p-4">
+          <pre className="text-xs font-mono text-gray-200 whitespace-pre-wrap">{viewer.content}</pre>
+        </div>
+      </Modal>
 
-      <AnimatePresence>
-        {deleteTarget && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-[#252524] border border-red-900/50 rounded-lg shadow-2xl p-6"
-            >
-              <div className="flex items-center gap-3 text-red-500 mb-4">
-                <AlertTriangle size={24} />
-                <h3 className="text-xl font-bold">Delete Log File?</h3>
-              </div>
-              <p className="text-gray-300 mb-6">
-                Are you sure you want to delete the chosen file?
-              </p>
-              <div className="flex justify-end gap-3">
-                <button onClick={() => setDeleteTarget(null)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
-                <button onClick={() => deleteFile(deleteTarget)} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Confirm</button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <Modal open={deleteTarget} tone="danger">
+        <div className="flex items-center gap-3 text-red-500 mb-4">
+          <AlertTriangle size={24} />
+          <h3 className="text-xl font-bold">Delete Log File?</h3>
+        </div>
+        <p className="text-gray-300 mb-6">
+          Are you sure you want to delete the chosen file?
+        </p>
+        <div className="flex justify-end gap-3">
+          <button onClick={() => setDeleteTarget(null)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
+          <button onClick={() => deleteFile(deleteTarget)} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Confirm</button>
+        </div>
+      </Modal>
 
-      {/* Batch Delete Confirmation Modal for Stored Logs */}
-      <AnimatePresence>
-        {batchDeleteConfirm && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setBatchDeleteConfirm(false)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-[#252524] border border-red-900/50 rounded-lg shadow-2xl p-6"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center gap-3 text-red-500 mb-4">
-                <AlertTriangle size={24} />
-                <h3 className="text-xl font-bold">Delete {selectedFiles.size} Log File{selectedFiles.size > 1 ? 's' : ''}?</h3>
-              </div>
-              <p className="text-gray-300 mb-6">
-                Are you sure you want to delete the chosen files?
-              </p>
-              <div className="flex justify-end gap-3">
-                <button onClick={() => setBatchDeleteConfirm(false)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
-                <button onClick={handleBatchDelete} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Delete</button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <Modal open={batchDeleteConfirm} tone="danger" onBackdropClick={() => setBatchDeleteConfirm(false)}>
+        <div className="flex items-center gap-3 text-red-500 mb-4">
+          <AlertTriangle size={24} />
+          <h3 className="text-xl font-bold">Delete {selectedFiles.size} Log File{selectedFiles.size > 1 ? 's' : ''}?</h3>
+        </div>
+        <p className="text-gray-300 mb-6">
+          Are you sure you want to delete the chosen files?
+        </p>
+        <div className="flex justify-end gap-3">
+          <button onClick={() => setBatchDeleteConfirm(false)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
+          <button onClick={handleBatchDelete} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Delete</button>
+        </div>
+      </Modal>
       {undoOverlay}
     </div>
     </>
@@ -479,12 +443,6 @@ const StoredLogs = ({ serverId }: { serverId: string }) => {
 
 const LiveLogs = () => {
   const { activeServer, refreshServers } = useServer();
-
-  // When server is not running, show stored logs (one-click select, double-click open)
-  if (!activeServer) return <div className="flex-1 p-4 text-gray-500">No server selected</div>;
-  if (activeServer.status !== 'Running' && activeServer.status !== 'Booting') {
-    return <div className="flex-1 overflow-y-auto p-4 md:p-8 min-h-0"><StoredLogs serverId={activeServer.id} /></div>;
-  }
 
   const [filterLevel, setFilterLevel] = useState<string | null>(null);
   const [isPaused, setIsPaused] = useState(false);
@@ -547,9 +505,10 @@ const LiveLogs = () => {
         if (data.type === 'log') {
           if (isPausedRef.current) return;
           if (typeof data.line !== 'string') return;
+          const line = data.line;
           setLogs((prev) => {
             const previousType = prev.length > 0 ? prev[prev.length - 1].type : undefined;
-            return [...prev, parseConsoleLine(data.line, logIdRef.current++, previousType)];
+            return [...prev, parseConsoleLine(line, logIdRef.current++, previousType)];
           });
         }
       } catch {
@@ -583,6 +542,12 @@ const LiveLogs = () => {
     (!filterLevel || l.type === filterLevel) &&
     (l.msg.toLowerCase().includes(search.toLowerCase()))
   );
+
+  // When server is not running, show stored logs (one-click select, double-click open)
+  if (!activeServer) return <div className="flex-1 p-4 text-gray-500">No server selected</div>;
+  if (activeServer.status !== 'Running' && activeServer.status !== 'Booting') {
+    return <div className="flex-1 overflow-y-auto p-4 md:p-8 min-h-0"><StoredLogs serverId={activeServer.id} /></div>;
+  }
 
   return (
     <div className="flex-1 min-h-0 overflow-auto p-4 md:p-8">
@@ -977,94 +942,58 @@ const CrashReports = () => {
         </div>
       </div>
 
-      <AnimatePresence>
-        {deleteTarget && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-[#252524] border border-red-900/50 rounded-lg shadow-2xl p-6"
-            >
-              <div className="flex items-center gap-3 text-red-500 mb-4">
-                <AlertTriangle size={24} />
-                <h3 className="text-xl font-bold">Delete Crash Report?</h3>
-              </div>
-              <p className="text-gray-300 mb-6">
-                Are you sure you want to delete the chosen file?
-              </p>
-              <div className="flex justify-end gap-3">
-                <button onClick={() => setDeleteTarget(null)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
-                <button onClick={() => handleDelete(deleteTarget)} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Confirm</button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <Modal open={deleteTarget} tone="danger">
+        <div className="flex items-center gap-3 text-red-500 mb-4">
+          <AlertTriangle size={24} />
+          <h3 className="text-xl font-bold">Delete Crash Report?</h3>
+        </div>
+        <p className="text-gray-300 mb-6">
+          Are you sure you want to delete the chosen file?
+        </p>
+        <div className="flex justify-end gap-3">
+          <button onClick={() => setDeleteTarget(null)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
+          <button onClick={() => handleDelete(deleteTarget)} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Confirm</button>
+        </div>
+      </Modal>
 
-      {/* Batch Delete Confirmation Modal */}
-      <AnimatePresence>
-        {batchDeleteConfirm && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setBatchDeleteConfirm(false)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-[#252524] border border-red-900/50 rounded-lg shadow-2xl p-6"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center gap-3 text-red-500 mb-4">
-                <AlertTriangle size={24} />
-                <h3 className="text-xl font-bold">Delete {selectedReports.size} Crash Report{selectedReports.size > 1 ? 's' : ''}?</h3>
-              </div>
-              <p className="text-gray-300 mb-6">
-                Are you sure you want to delete the chosen files?
-              </p>
-              <div className="flex justify-end gap-3">
-                <button onClick={() => setBatchDeleteConfirm(false)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
-                <button onClick={handleBatchDelete} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Delete</button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <Modal open={batchDeleteConfirm} tone="danger" onBackdropClick={() => setBatchDeleteConfirm(false)}>
+        <div className="flex items-center gap-3 text-red-500 mb-4">
+          <AlertTriangle size={24} />
+          <h3 className="text-xl font-bold">Delete {selectedReports.size} Crash Report{selectedReports.size > 1 ? 's' : ''}?</h3>
+        </div>
+        <p className="text-gray-300 mb-6">
+          Are you sure you want to delete the chosen files?
+        </p>
+        <div className="flex justify-end gap-3">
+          <button onClick={() => setBatchDeleteConfirm(false)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
+          <button onClick={handleBatchDelete} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Delete</button>
+        </div>
+      </Modal>
 
-      {/* Crash report viewer (double-click to open) */}
-      <AnimatePresence>
-        {reportViewer.name && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-4xl bg-[#0f0f0f] border border-[#404040] rounded-lg shadow-2xl max-h-[80vh] overflow-hidden flex flex-col"
+      <Modal open={reportViewer.name} size="xl" className="bg-[#0f0f0f] max-h-[80vh] overflow-hidden flex flex-col p-0">
+        <div className="sticky top-0 z-10 bg-[#0f0f0f] border-b border-[#2f2f2f] px-4 py-3 flex items-center justify-between gap-3">
+          <h3 className="text-lg font-bold truncate">{reportViewer.name}</h3>
+          <div className="flex gap-2">
+            <button
+              onClick={async () => {
+                try {
+                  await copyToClipboard(reportViewer.content || '');
+                  toast.info('Log copied to clipboard.');
+                } catch {
+                  toast.error('Failed to copy log');
+                }
+              }}
+              className="px-3 py-1 bg-[#333] rounded text-sm"
             >
-              <div className="sticky top-0 z-10 bg-[#0f0f0f] border-b border-[#2f2f2f] px-4 py-3 flex items-center justify-between gap-3">
-                <h3 className="text-lg font-bold truncate">{reportViewer.name}</h3>
-                <div className="flex gap-2">
-                  <button
-                    onClick={async () => {
-                      try {
-                        await copyToClipboard(reportViewer.content || '');
-                        toast.info('Log copied to clipboard.');
-                      } catch {
-                        toast.error('Failed to copy log');
-                      }
-                    }}
-                    className="px-3 py-1 bg-[#333] rounded text-sm"
-                  >
-                    Copy
-                  </button>
-                  <button onClick={() => setReportViewer({ name: null, content: null })} className="px-3 py-1 bg-[#E5B80B] rounded text-sm text-black">Close</button>
-                </div>
-              </div>
-              <div className="flex-1 min-h-0 overflow-auto p-4">
-                <pre className="text-xs font-mono text-gray-200 whitespace-pre-wrap">{reportViewer.content}</pre>
-              </div>
-            </motion.div>
+              Copy
+            </button>
+            <button onClick={() => setReportViewer({ name: null, content: null })} className="px-3 py-1 bg-[#E5B80B] rounded text-sm text-black">Close</button>
           </div>
-        )}
-      </AnimatePresence>
+        </div>
+        <div className="flex-1 min-h-0 overflow-auto p-4">
+          <pre className="text-xs font-mono text-gray-200 whitespace-pre-wrap">{reportViewer.content}</pre>
+        </div>
+      </Modal>
       {undoOverlay}
     </div>
   </div>

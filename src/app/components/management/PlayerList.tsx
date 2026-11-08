@@ -94,6 +94,22 @@ export const PlayerList = ({ server }: PlayerListProps) => {
     return () => clearInterval(interval);
   }, [server.type, server.status, fetchPlayers, pollMs]);
 
+  const filteredPlayers = players.filter(p =>
+    p.name.toLowerCase().includes(filter.toLowerCase())
+  );
+  const animateRows = filteredPlayers.length <= 40;
+  const isPlayerListRenderable = server.type !== 'Velocity' && server.status === 'Running';
+
+  useEffect(() => {
+    if (!isPlayerListRenderable) return;
+    if (!openPlayerName) return;
+    const stillVisible = filteredPlayers.some((player) => player.name === openPlayerName);
+    if (!stillVisible) {
+      setOpenPlayerName(null);
+      setMobileMenuView('details');
+    }
+  }, [filteredPlayers, openPlayerName, isPlayerListRenderable]);
+
   if (server.type === 'Velocity') {
     return (
       <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
@@ -111,20 +127,6 @@ export const PlayerList = ({ server }: PlayerListProps) => {
       </div>
     );
   }
-
-  const filteredPlayers = players.filter(p =>
-    p.name.toLowerCase().includes(filter.toLowerCase())
-  );
-  const animateRows = filteredPlayers.length <= 40;
-
-  useEffect(() => {
-    if (!openPlayerName) return;
-    const stillVisible = filteredPlayers.some((player) => player.name === openPlayerName);
-    if (!stillVisible) {
-      setOpenPlayerName(null);
-      setMobileMenuView('details');
-    }
-  }, [filteredPlayers, openPlayerName]);
 
   const handleAction = async (playerName: string, action: 'kick' | 'ban' | 'kill') => {
     try {

@@ -1,3 +1,4 @@
+import type { Variants } from 'motion/react';
 import type { JVMFlagsPreset } from './types';
 
 export const SERVER_TYPES = [
@@ -16,7 +17,7 @@ export const DEFAULT_CREATE_FORM = {
   maxPlayers: '20',
 };
 
-export const importInfoContainerVariants = {
+export const importInfoContainerVariants: Variants = {
   hidden: { opacity: 0 },
   show: {
     opacity: 1,
@@ -24,7 +25,7 @@ export const importInfoContainerVariants = {
   },
 };
 
-export const importInfoItemVariants = {
+export const importInfoItemVariants: Variants = {
   hidden: { opacity: 0, y: 6 },
   show: { opacity: 1, y: 0, transition: { duration: 0.18, ease: 'easeOut' } },
 };

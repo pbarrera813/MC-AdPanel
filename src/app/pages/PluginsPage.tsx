@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useServer, Plugin } from '../context/ServerContext';
 import { Upload, Trash2, RefreshCw, AlertTriangle, AlertCircle, CheckCircle, XCircle, Loader2, ArrowDownCircle, Cloud, Check, Square, Save, Pencil } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { Modal } from '../components/ui/modal';
 import { toast } from 'sonner';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../components/ui/tooltip';
 import clsx from 'clsx';
@@ -150,7 +150,13 @@ export const PluginsPage = () => {
     setPendingDeletedPluginFiles(new Set());
   }, [activeServerId]);
 
-  useEscapeKey(isUploadModalOpen, () => setIsUploadModalOpen(false));
+  useEscapeKey(isUploadModalOpen && !uploadConflict, () => setIsUploadModalOpen(false));
+  useEscapeKey(!!uploadConflict, () => {
+    uploadConflictResolverRef.current?.('skip');
+    uploadConflictResolverRef.current = null;
+    setUploadConflict(null);
+  });
+  useEscapeKey(batchDeleteConfirmPlugins, () => setBatchDeleteConfirmPlugins(false));
   useEscapeKey(!!deleteTarget, () => setDeleteTarget(null));
   useEscapeKey(restartPromptOpen, () => { setRestartPromptOpen(false); setPendingUpdate(null); });
   useEscapeKey(updateAllPromptOpen, () => setUpdateAllPromptOpen(false));
@@ -999,272 +1005,177 @@ export const PluginsPage = () => {
         </div>
       )}
 
-      {/* Upload Modal */}
-      <AnimatePresence>
-        {isUploadModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-lg bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6"
-            >
-              <h3 className="text-xl font-bold text-white mb-4">Upload {itemLabelCap}</h3>
-              {uploading ? (
-                <div className="h-48 flex flex-col items-center justify-center text-[#E5B80B]">
-                  <Loader2 size={48} className="animate-spin mb-4" />
-                  <p className="text-gray-300">Uploading...</p>
-                </div>
-              ) : (
-                <div
-                  className="border-2 border-dashed border-[#404040] rounded-lg h-48 flex flex-col items-center justify-center text-gray-400 mb-6 cursor-pointer hover:border-[#E5B80B] hover:text-[#E5B80B] transition-colors bg-[#202020]"
-                  onClick={() => fileInputRef.current?.click()}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => { e.preventDefault(); handleUpload(e.dataTransfer.files); }}
-                >
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".jar"
-                    multiple
-                    className="hidden"
-                    onChange={(e) => handleUpload(e.target.files)}
-                  />
-                  <Upload size={32} className="mb-2" />
-                  <p>Drag & drop .jar file here</p>
-                  <p className="text-xs text-gray-600 mt-2">or click to browse</p>
-                  <p className="text-xs text-gray-600 mt-1">Maximum file size: 256MB</p>
-                </div>
-              )}
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={() => setIsUploadModalOpen(false)}
-                  className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
-                  disabled={uploading}
-                >
-                  Cancel
-                </button>
-              </div>
-            </motion.div>
+      <Modal open={isUploadModalOpen} size="lg">
+        <h3 className="text-xl font-bold text-white mb-4">Upload {itemLabelCap}</h3>
+        {uploading ? (
+          <div className="h-48 flex flex-col items-center justify-center text-[#E5B80B]">
+            <Loader2 size={48} className="animate-spin mb-4" />
+            <p className="text-gray-300">Uploading...</p>
+          </div>
+        ) : (
+          <div
+            className="border-2 border-dashed border-[#404040] rounded-lg h-48 flex flex-col items-center justify-center text-gray-400 mb-6 cursor-pointer hover:border-[#E5B80B] hover:text-[#E5B80B] transition-colors bg-[#202020]"
+            onClick={() => fileInputRef.current?.click()}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => { e.preventDefault(); handleUpload(e.dataTransfer.files); }}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".jar"
+              multiple
+              className="hidden"
+              onChange={(e) => handleUpload(e.target.files)}
+            />
+            <Upload size={32} className="mb-2" />
+            <p>Drag & drop .jar file here</p>
+            <p className="text-xs text-gray-600 mt-2">or click to browse</p>
+            <p className="text-xs text-gray-600 mt-1">Maximum file size: 256MB</p>
           </div>
         )}
-      </AnimatePresence>
+        <div className="flex justify-end gap-3">
+          <button
+            onClick={() => setIsUploadModalOpen(false)}
+            className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
+            disabled={uploading}
+          >
+            Cancel
+          </button>
+        </div>
+      </Modal>
 
-      <AnimatePresence>
-        {uploadConflict && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6"
-            >
-              <h3 className="text-xl font-bold text-white mb-3">File already exists</h3>
-              <p className="text-gray-300 mb-6">
-                The destination already has a file named <span className="font-bold text-white">{uploadConflict.name}</span>.
-              </p>
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={() => {
-                    uploadConflictResolverRef.current?.('skip');
-                    uploadConflictResolverRef.current = null;
-                    setUploadConflict(null);
-                  }}
-                  className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
-                >
-                  Skip
-                </button>
-                <button
-                  onClick={() => {
-                    uploadConflictResolverRef.current?.('replace');
-                    uploadConflictResolverRef.current = null;
-                    setUploadConflict(null);
-                  }}
-                  className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold"
-                >
-                  Replace
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <Modal open={uploadConflict} stacked>
+        <h3 className="text-xl font-bold text-white mb-3">File already exists</h3>
+        <p className="text-gray-300 mb-6">
+          The destination already has a file named <span className="font-bold text-white">{uploadConflict?.name}</span>.
+        </p>
+        <div className="flex justify-end gap-3">
+          <button
+            onClick={() => {
+              uploadConflictResolverRef.current?.('skip');
+              uploadConflictResolverRef.current = null;
+              setUploadConflict(null);
+            }}
+            className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
+          >
+            Skip
+          </button>
+          <button
+            onClick={() => {
+              uploadConflictResolverRef.current?.('replace');
+              uploadConflictResolverRef.current = null;
+              setUploadConflict(null);
+            }}
+            className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold"
+          >
+            Replace
+          </button>
+        </div>
+      </Modal>
 
-      <AnimatePresence>
-        {duplicateInstalledModalOpen && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6"
-            >
-              <h3 className="text-xl font-bold text-white mb-3">Already Installed</h3>
-              <p className="text-gray-300 mb-6">
-                That {itemLabel} is already installed!
-              </p>
-              <div className="flex justify-end">
-                <button
-                  onClick={() => setDuplicateInstalledModalOpen(false)}
-                  className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold"
-                >
-                  OK
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <Modal open={duplicateInstalledModalOpen} stacked>
+        <h3 className="text-xl font-bold text-white mb-3">Already Installed</h3>
+        <p className="text-gray-300 mb-6">
+          That {itemLabel} is already installed!
+        </p>
+        <div className="flex justify-end">
+          <button
+            onClick={() => setDuplicateInstalledModalOpen(false)}
+            className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold"
+          >
+            OK
+          </button>
+        </div>
+      </Modal>
 
-      {/* Delete Confirmation Modal */}
-      <AnimatePresence>
-        {deleteTarget && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-[#252524] border border-red-900/50 rounded-lg shadow-2xl p-6"
-            >
-              <div className="flex items-center gap-3 text-red-500 mb-4">
-                <AlertTriangle size={24} />
-                <h3 className="text-xl font-bold">Delete {itemLabelCap}?</h3>
-              </div>
-              <p className="text-gray-300 mb-6">Are you sure you want to delete the chosen file?</p>
-              <div className="flex justify-end gap-3">
-                <button onClick={() => setDeleteTarget(null)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
-                <button onClick={() => handleDelete(deleteTarget)} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Delete</button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <Modal open={deleteTarget} tone="danger">
+        <div className="flex items-center gap-3 text-red-500 mb-4">
+          <AlertTriangle size={24} />
+          <h3 className="text-xl font-bold">Delete {itemLabelCap}?</h3>
+        </div>
+        <p className="text-gray-300 mb-6">Are you sure you want to delete the chosen file?</p>
+        <div className="flex justify-end gap-3">
+          <button onClick={() => setDeleteTarget(null)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
+          <button onClick={() => handleDelete(deleteTarget)} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Delete</button>
+        </div>
+      </Modal>
 
-      {/* Batch Delete Selected Plugins */}
-      <AnimatePresence>
-        {batchDeleteConfirmPlugins && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setBatchDeleteConfirmPlugins(false)}>
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-[#252524] border border-red-900/50 rounded-lg shadow-2xl p-6"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center gap-3 text-red-500 mb-4">
-                <AlertTriangle size={24} />
-                <h3 className="text-xl font-bold">Delete {selectedPlugins.size} {itemLabelCap}{selectedPlugins.size > 1 ? 's' : ''}?</h3>
-              </div>
-              <p className="text-gray-300 mb-6">Are you sure you want to delete the chosen files?</p>
-              <div className="flex justify-end gap-3">
-                <button onClick={() => setBatchDeleteConfirmPlugins(false)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
-                <button onClick={() => { setBatchDeleteConfirmPlugins(false); handleDeleteSelected(); }} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Delete</button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <Modal open={batchDeleteConfirmPlugins} tone="danger" onBackdropClick={() => setBatchDeleteConfirmPlugins(false)}>
+        <div className="flex items-center gap-3 text-red-500 mb-4">
+          <AlertTriangle size={24} />
+          <h3 className="text-xl font-bold">Delete {selectedPlugins.size} {itemLabelCap}{selectedPlugins.size > 1 ? 's' : ''}?</h3>
+        </div>
+        <p className="text-gray-300 mb-6">Are you sure you want to delete the chosen files?</p>
+        <div className="flex justify-end gap-3">
+          <button onClick={() => setBatchDeleteConfirmPlugins(false)} className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium">Cancel</button>
+          <button onClick={() => { setBatchDeleteConfirmPlugins(false); handleDeleteSelected(); }} className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded font-bold">Delete</button>
+        </div>
+      </Modal>
 
-      {/* Source Link Confirmation */}
-      <AnimatePresence>
-        {sourceConfirmOpen && pendingSource && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6"
-            >
-              <h3 className="text-xl font-bold text-white mb-3">Confirm source link</h3>
-              <p className="text-gray-300">Are you sure this is the correct link?</p>
-              <p className="text-xs text-gray-500 mb-3">This can be changed later.</p>
-              <p className="text-xs text-[#E5B80B] break-all mb-6">{pendingSource.url}</p>
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={() => { setSourceConfirmOpen(false); setPendingSource(null); }}
-                  className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
-                  disabled={savingSourceFor !== null}
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={confirmSaveSource}
-                  className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold"
-                  disabled={savingSourceFor !== null}
-                >
-                  Accept
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <Modal open={sourceConfirmOpen && pendingSource}>
+        <h3 className="text-xl font-bold text-white mb-3">Confirm source link</h3>
+        <p className="text-gray-300">Are you sure this is the correct link?</p>
+        <p className="text-xs text-gray-500 mb-3">This can be changed later.</p>
+        <p className="text-xs text-[#E5B80B] break-all mb-6">{pendingSource?.url}</p>
+        <div className="flex justify-end gap-3">
+          <button
+            onClick={() => { setSourceConfirmOpen(false); setPendingSource(null); }}
+            className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
+            disabled={savingSourceFor !== null}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={confirmSaveSource}
+            className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold"
+            disabled={savingSourceFor !== null}
+          >
+            Accept
+          </button>
+        </div>
+      </Modal>
 
-      {/* Restart Needed (Single Update) */}
-      <AnimatePresence>
-        {restartPromptOpen && !isServerOff && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6"
-            >
-              <h3 className="text-xl font-bold text-white mb-3">Stop server to apply update</h3>
-              <p className="text-gray-300 mb-6">Stop the server first to avoid corrupting plugin data. After stopping you can apply updates from this UI.</p>
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={() => { setRestartPromptOpen(false); setPendingUpdate(null); }}
-                  className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
-                  disabled={updatingPlugin !== null}
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={confirmSingleUpdate}
-                  className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold"
-                  disabled={updatingPlugin !== null}
-                >
-                  Update
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <Modal open={restartPromptOpen && !isServerOff}>
+        <h3 className="text-xl font-bold text-white mb-3">Stop server to apply update</h3>
+        <p className="text-gray-300 mb-6">Stop the server first to avoid corrupting plugin data. After stopping you can apply updates from this UI.</p>
+        <div className="flex justify-end gap-3">
+          <button
+            onClick={() => { setRestartPromptOpen(false); setPendingUpdate(null); }}
+            className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
+            disabled={updatingPlugin !== null}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={confirmSingleUpdate}
+            className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold"
+            disabled={updatingPlugin !== null}
+          >
+            Update
+          </button>
+        </div>
+      </Modal>
 
-      {/* Restart Needed (Update All) */}
-      <AnimatePresence>
-        {updateAllPromptOpen && !isServerOff && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-md bg-[#252524] border border-[#404040] rounded-lg shadow-2xl p-6"
-            >
-              <h3 className="text-xl font-bold text-white mb-3">Stop server to apply updates</h3>
-              <p className="text-gray-300 mb-6">Stop the server first to avoid corrupting plugin data. After stopping you can apply updates from this UI.</p>
-              <div className="flex justify-end gap-3">
-                <button
-                  onClick={() => setUpdateAllPromptOpen(false)}
-                  className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
-                  disabled={updatingAll}
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={confirmUpdateAll}
-                  className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold"
-                  disabled={updatingAll}
-                >
-                  {hasSelection && !allSelected ? 'Update selected' : 'Update all'}
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      <Modal open={updateAllPromptOpen && !isServerOff}>
+        <h3 className="text-xl font-bold text-white mb-3">Stop server to apply updates</h3>
+        <p className="text-gray-300 mb-6">Stop the server first to avoid corrupting plugin data. After stopping you can apply updates from this UI.</p>
+        <div className="flex justify-end gap-3">
+          <button
+            onClick={() => setUpdateAllPromptOpen(false)}
+            className="px-4 py-2 bg-[#333] hover:bg-[#404040] text-gray-200 rounded font-medium"
+            disabled={updatingAll}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={confirmUpdateAll}
+            className="px-4 py-2 bg-[#E5B80B] hover:bg-[#d4a90a] text-black rounded font-bold"
+            disabled={updatingAll}
+          >
+            {hasSelection && !allSelected ? 'Update selected' : 'Update all'}
+          </button>
+        </div>
+      </Modal>
       {undoOverlay}
 
     </div>
